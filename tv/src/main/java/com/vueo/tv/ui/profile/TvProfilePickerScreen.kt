@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -926,25 +927,12 @@ private fun TvProfileBackground(content: @Composable () -> Unit) {
 
 @Composable
 private fun TvProfileBrand() {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Start,
-    ) {
-        Image(
-            painter = painterResource(R.drawable.vueo_tv_logo),
-            contentDescription = "VUEO",
-            contentScale = ContentScale.Fit,
-            modifier = Modifier.size(42.dp),
-        )
-        Spacer(Modifier.width(13.dp))
-        Text(
-            text = "VUEO",
-            color = Color.White,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 27.sp,
-            letterSpacing = 3.5.sp,
-        )
-    }
+    Image(
+        painter = painterResource(R.drawable.virio_wordmark),
+        contentDescription = "Virio",
+        contentScale = ContentScale.Fit,
+        modifier = Modifier.width(160.dp).aspectRatio(921f / 260f),
+    )
 }
 
 @Composable

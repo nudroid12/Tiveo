@@ -1,24 +1,17 @@
 package com.vueo.mobile.ui
 
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.vueo.mobile.R
 import com.vueo.mobile.core.storage.AppAccent
 import com.vueo.mobile.core.storage.AppTheme
@@ -150,49 +143,14 @@ internal object VueoPalette {
 internal fun AppAccent.composeColor(): Color = Color(argb)
 
 @Composable
-internal fun VueoBrandMark(
-    modifier: Modifier = Modifier,
-    @Suppress("UNUSED_PARAMETER")
-    color: Color = VueoPalette.BrandLime,
-) {
-    Image(
-        painter = painterResource(
-            R.drawable.vueo_logo_mark
-        ),
-        contentDescription = "VUEO",
-        modifier = modifier,
-        contentScale = ContentScale.Fit,
-    )
-}
-
-@Composable
 internal fun VueoBrandLockup(
     modifier: Modifier = Modifier,
     compact: Boolean = false,
 ) {
-    Row(
-        modifier = modifier,
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Start,
-    ) {
-        VueoBrandMark(
-            modifier = Modifier.size(
-                if (compact) 29.dp else 36.dp
-            )
-        )
-
-        Spacer(
-            Modifier.width(
-                if (compact) 8.dp else 11.dp
-            )
-        )
-
-        Text(
-            text = "VUEO",
-            color = Color.White,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = if (compact) 18.sp else 23.sp,
-            letterSpacing = if (compact) 2.2.sp else 3.0.sp,
-        )
-    }
+    Image(
+        painter = painterResource(R.drawable.virio_wordmark),
+        contentDescription = "Virio",
+        modifier = modifier.width(if (compact) 94.dp else 124.dp).aspectRatio(921f / 260f),
+        contentScale = ContentScale.Fit,
+    )
 }
