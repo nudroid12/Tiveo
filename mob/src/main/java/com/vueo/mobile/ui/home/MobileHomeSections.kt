@@ -732,7 +732,7 @@ internal fun HomeLoadingState() {
     ) {
         HomeSectionHeader(
             title =
-                "Loading Tivio",
+                "Loading Tiveo",
             subtitle =
                 "Refreshing catalogs",
         )

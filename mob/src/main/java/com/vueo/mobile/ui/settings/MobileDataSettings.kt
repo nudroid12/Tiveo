@@ -582,7 +582,7 @@ internal fun AboutVueoSettingsScreen(
     }
 
     VueoSettingsPage(
-        title = "About Tivio",
+        title = "About Tiveo",
         subtitle = "Version, updates and app information.",
         onBack = onBack,
     ) {
@@ -601,7 +601,7 @@ internal fun AboutVueoSettingsScreen(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text("Tivio", modifier = Modifier.weight(1f), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            Text("Tiveo", modifier = Modifier.weight(1f), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                             Text(BuildConfig.VERSION_NAME, color = VueoPalette.Accent, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         }
                         Text("A universal media player.", color = VueoPalette.Muted, fontSize = 10.5.sp)

@@ -1253,9 +1253,9 @@ fun VueoTvApp(
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Image(
                             painter = painterResource(R.drawable.virio_wordmark),
-                            contentDescription = "Tivio",
+                            contentDescription = "Tiveo",
                             contentScale = ContentScale.Fit,
-                            modifier = Modifier.width(320.dp).aspectRatio(941f / 260f),
+                            modifier = Modifier.width(320.dp).aspectRatio(1075f / 210f),
                         )
                     }
                 }

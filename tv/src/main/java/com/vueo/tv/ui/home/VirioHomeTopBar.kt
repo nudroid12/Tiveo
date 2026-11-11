@@ -63,7 +63,7 @@ internal fun VirioHomeTopBar(
     ) {
         Image(
             painter = painterResource(R.drawable.virio_wordmark),
-            contentDescription = "Tivio",
+            contentDescription = "Tiveo",
             modifier = Modifier.padding(end = 14.dp).width(94.dp).height(28.dp),
         )
         VirioHomeTabs.forEachIndexed { index, destination ->
