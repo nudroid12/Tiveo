@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -22,8 +23,8 @@ import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material.icons.filled.ThumbDown
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.Bookmark
-import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -64,7 +65,7 @@ import com.vueo.tv.R
 import com.vueo.tv.ui.TvDesign
 import com.vueo.tv.ui.TvNetworkImage
 
-private val VueoHeroContentWidth = .50f
+private const val VueoHeroContentWidth = .54f
 private val VueoHeroActionSize = 44.dp
 
 @Composable
@@ -127,22 +128,71 @@ internal fun VueoDetailHero(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(heroHeight)
+            .heightIn(min = heroHeight)
             .padding(
                 start = VueoDetailHorizontalPadding,
                 end = VueoDetailHorizontalPadding,
                 top = 24.dp,
-                bottom = 32.dp,
+                bottom = 26.dp,
             ),
         verticalArrangement = Arrangement.Bottom,
     ) {
         VueoHeroTitle(
             title = item.name,
             logoUrl = state.vueoExtras.logo,
-            artworkLoading = state.titleArtworkLoading,
         )
 
-        Spacer(Modifier.height(12.dp))
+        if (state.ratings.isNotEmpty() || state.dnaMatch != null) {
+            VueoRatingsRow(state.ratings, state.dnaMatch)
+            Spacer(Modifier.height(12.dp))
+        }
+
+        if (primaryMeta.isNotEmpty()) {
+            VueoMetaTextRow(primaryMeta, fontSize = 13)
+            Spacer(Modifier.height(9.dp))
+        }
+
+        val certification = item.certification?.trim()?.takeIf(String::isNotBlank)
+        val status = state.vueoExtras.status?.trim()?.takeIf(String::isNotBlank)
+        if (certification != null || status != null || secondaryMeta.isNotEmpty()) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(11.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                when {
+                    certification != null && status != null -> VueoCombinedMetaBadge(certification, status)
+                    certification != null -> VueoMetaBadge(certification)
+                    status != null -> VueoMetaBadge(status)
+                }
+                if ((certification != null || status != null) && secondaryMeta.isNotEmpty()) {
+                    VueoMetaDot()
+                }
+                secondaryMeta.forEachIndexed { index, value ->
+                    Text(
+                        text = value,
+                        color = TvDesign.White.copy(alpha = .88f),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                    )
+                    if (index < secondaryMeta.lastIndex) VueoMetaDot()
+                }
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        item.description?.trim()?.takeIf(String::isNotBlank)?.let { synopsis ->
+            Text(
+                text = synopsis,
+                color = TvDesign.White.copy(alpha = .92f),
+                fontSize = 14.sp,
+                lineHeight = 19.sp,
+                fontWeight = FontWeight.Normal,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth(VueoHeroContentWidth),
+            )
+            Spacer(Modifier.height(11.dp))
+        }
 
         Row(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -157,8 +207,9 @@ internal fun VueoDetailHero(
                 onClick = onPlay,
             )
             VueoCircleAction(
-                icon = if (state.watchlisted) Icons.Default.Bookmark else Icons.Outlined.BookmarkBorder,
-                contentDescription = if (state.watchlisted) "Remove from Watchlist" else "Add to Watchlist",
+                icon = if (state.watchlisted) Icons.Default.Check else Icons.Default.Add,
+                contentDescription = if (state.watchlisted) "Remove from My List" else "Add to My List",
+                label = "My List",
                 selected = state.watchlisted,
                 requester = listRequester,
                 leftRequester = playRequester,
@@ -206,9 +257,8 @@ internal fun VueoDetailHero(
 
         }
 
-        Spacer(Modifier.height(8.dp))
-
         if (creditLines.isNotEmpty()) {
+            Spacer(Modifier.height(14.dp))
             Column(
                 modifier = Modifier.fillMaxWidth(VueoHeroContentWidth),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -228,57 +278,6 @@ internal fun VueoDetailHero(
             Spacer(Modifier.height(11.dp))
         }
 
-        if (state.ratings.isNotEmpty() || state.dnaMatch != null) {
-            VueoRatingsRow(state.ratings, state.dnaMatch)
-            Spacer(Modifier.height(12.dp))
-        }
-
-        item.description?.trim()?.takeIf(String::isNotBlank)?.let { synopsis ->
-            Text(
-                text = synopsis,
-                color = TvDesign.White.copy(alpha = .92f),
-                fontSize = 14.sp,
-                lineHeight = 19.sp,
-                fontWeight = FontWeight.Normal,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth(VueoHeroContentWidth),
-            )
-            Spacer(Modifier.height(11.dp))
-        }
-
-        if (primaryMeta.isNotEmpty()) {
-            VueoMetaTextRow(primaryMeta, fontSize = 13)
-            Spacer(Modifier.height(9.dp))
-        }
-
-        val certification = item.certification?.trim()?.takeIf(String::isNotBlank)
-        val status = state.vueoExtras.status?.trim()?.takeIf(String::isNotBlank)
-        if (certification != null || status != null || secondaryMeta.isNotEmpty()) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(11.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                when {
-                    certification != null && status != null -> VueoCombinedMetaBadge(certification, status)
-                    certification != null -> VueoMetaBadge(certification)
-                    status != null -> VueoMetaBadge(status)
-                }
-                if ((certification != null || status != null) && secondaryMeta.isNotEmpty()) {
-                    VueoMetaDot()
-                }
-                secondaryMeta.forEachIndexed { index, value ->
-                    Text(
-                        text = value,
-                        color = TvDesign.White.copy(alpha = .88f),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                    )
-                    if (index < secondaryMeta.lastIndex) VueoMetaDot()
-                }
-            }
-        }
     }
 }
 
@@ -286,11 +285,10 @@ internal fun VueoDetailHero(
 private fun VueoHeroTitle(
     title: String,
     logoUrl: String?,
-    artworkLoading: Boolean,
 ) {
-    // Keep the logo within the leading margin, independent of the Play button's width.
-    Box(Modifier.width(300.dp).height(100.dp), contentAlignment = Alignment.CenterStart) {
-        if (!logoUrl.isNullOrBlank()) {
+    var logoLoadFailed by remember(logoUrl) { mutableStateOf(false) }
+    Box(Modifier.width(320.dp).height(104.dp), contentAlignment = Alignment.CenterStart) {
+        if (!logoUrl.isNullOrBlank() && !logoLoadFailed) {
             TvNetworkImage(
                 url = logoUrl,
                 contentDescription = title,
@@ -301,13 +299,14 @@ private fun VueoHeroTitle(
                 alignment = Alignment.CenterStart,
                 fallback = Color.Transparent,
                 highPriority = true,
+                onLoadResult = { success -> logoLoadFailed = !success },
             )
-        } else if (!artworkLoading) {
+        } else {
             Text(
-                text = title.uppercase(),
+                text = title,
                 color = TvDesign.White,
-                fontSize = 32.sp,
-                lineHeight = 42.sp,
+                fontSize = 40.sp,
+                lineHeight = 43.sp,
                 fontWeight = FontWeight.ExtraBold,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
@@ -329,7 +328,7 @@ private fun VueoPlayButton(
     modifier: Modifier = Modifier,
 ) {
     var focused by remember(label) { mutableStateOf(false) }
-    val shape = RoundedCornerShape(30.dp)
+    val shape = RoundedCornerShape(6.dp)
 
     Row(
         modifier = modifier
@@ -345,12 +344,13 @@ private fun VueoPlayButton(
             .background(
                 when {
                     !enabled -> TvDesign.White.copy(alpha = .22f)
-                    else -> TvDesign.White
+                    focused -> TvDesign.White
+                    else -> TvDesign.White.copy(alpha = .88f)
                 }
             )
             .border(
                 width = if (focused) 2.dp else 0.dp,
-                color = if (focused) TvDesign.Focus else Color.Transparent,
+                color = if (focused) Color.White else Color.Transparent,
                 shape = shape,
             )
             .clickable(enabled = enabled, onClick = onClick)
@@ -385,12 +385,16 @@ private fun VueoCircleAction(
     rightRequester: FocusRequester?,
     downRequester: FocusRequester?,
     onClick: () -> Unit,
+    label: String? = null,
 ) {
-    var focused by remember(contentDescription, selected) { mutableStateOf(false) }
+    var focused by remember(requester) { mutableStateOf(false) }
 
-    Box(
+    val shape = if (label == null) CircleShape else RoundedCornerShape(6.dp)
+    val color = if (selected || focused) Color.Black else TvDesign.White
+
+    Row(
         modifier = Modifier
-            .size(VueoHeroActionSize)
+            .then(if (label == null) Modifier.size(VueoHeroActionSize) else Modifier.height(52.dp))
             .focusRequester(requester)
             .focusProperties {
                 up = FocusRequester.Cancel
@@ -399,30 +403,35 @@ private fun VueoCircleAction(
                 downRequester?.let { down = it }
             }
             .onFocusChanged { focused = it.isFocused }
-            .clip(CircleShape)
+            .clip(shape)
             .background(
                 when {
                     selected && focused -> TvDesign.White
                     selected -> TvDesign.White.copy(alpha = .92f)
-                    focused -> TvDesign.White.copy(alpha = .18f)
+                    focused -> TvDesign.White
                     else -> TvDesign.SurfaceRaised.copy(alpha = .82f)
                 }
             )
             .border(
                 width = if (focused) 2.dp else 1.dp,
-                color = if (focused) TvDesign.Focus else TvDesign.White.copy(alpha = .13f),
-                shape = CircleShape,
+                color = if (focused) Color.White else TvDesign.White.copy(alpha = .13f),
+                shape = shape,
             )
             .clickable(onClick = onClick)
-            .focusable(),
-        contentAlignment = Alignment.Center,
+            .focusable()
+            .padding(horizontal = if (label == null) 0.dp else 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             imageVector = icon,
             contentDescription = contentDescription,
-            tint = if (selected) Color.Black else TvDesign.White,
+            tint = color,
             modifier = Modifier.size(24.dp),
         )
+        if (label != null) {
+            Text(label, color = color, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        }
     }
 }
 

@@ -258,7 +258,7 @@ internal fun TvDetailPresentation(
             .fillMaxSize()
             .background(TvDesign.Black),
     ) {
-        val heroHeight = maxHeight
+        val heroHeight = if (firstBelowHero == null) maxHeight else maxHeight - 36.dp
         VueoDetailBackdrop(
             item = state.item,
             imageAlpha = backdropAlpha,

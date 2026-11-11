@@ -105,6 +105,7 @@ internal fun VueoDetailSeasonTabs(
             .padding(top = 6.dp, bottom = 2.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
+        VueoDetailSectionTitle("Episodes")
         LazyRow(
             state = listState,
             modifier = Modifier

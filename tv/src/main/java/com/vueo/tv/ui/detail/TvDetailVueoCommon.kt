@@ -23,7 +23,7 @@ import com.vueo.shared.core.media.MediaItem
 import com.vueo.tv.ui.TvDesign
 import com.vueo.tv.ui.TvNetworkImage
 
-internal val VueoDetailHorizontalPadding = 48.dp
+internal val VueoDetailHorizontalPadding = 40.dp
 internal val VueoDetailHeroHeight = 540.dp
 internal val VueoDetailCardShape = RoundedCornerShape(12.dp)
 
@@ -62,10 +62,10 @@ internal fun VueoDetailBackdrop(
                 .graphicsLayer { alpha = scrimAlpha }
                 .background(
                     Brush.horizontalGradient(
-                        0f to TvDesign.Black.copy(alpha = .88f),
-                        .18f to TvDesign.Black.copy(alpha = .72f),
-                        .42f to TvDesign.Black.copy(alpha = .42f),
-                        .68f to TvDesign.Black.copy(alpha = .10f),
+                        0f to TvDesign.Black.copy(alpha = .97f),
+                        .23f to TvDesign.Black.copy(alpha = .87f),
+                        .47f to TvDesign.Black.copy(alpha = .52f),
+                        .72f to TvDesign.Black.copy(alpha = .12f),
                         1f to Color.Transparent,
                     )
                 )
