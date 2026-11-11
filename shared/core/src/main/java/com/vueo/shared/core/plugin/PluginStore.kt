@@ -1,6 +1,10 @@
 package com.vueo.shared.core.plugin
 
 import android.content.Context
+import android.util.Log
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -66,30 +70,48 @@ class PluginStore(context: Context) {
     }
 
     suspend fun seedDevelopmentDefaultsIfNeeded() {
-        val revision = prefs.getInt(
-            KEY_DEV_DEFAULTS_REVISION,
-            0,
-        )
+        defaultSeedMutex.withLock {
+            if (prefs.getInt(KEY_DEV_DEFAULTS_REVISION, 0) < DEV_DEFAULTS_REVISION) {
+                repositories().filter { it.manifestUrl in RETIRED_DEFAULT_MANIFESTS }
+                    .forEach { remove(it.manifestUrl) }
+                prefs.edit().putInt(KEY_DEV_DEFAULTS_REVISION, DEV_DEFAULTS_REVISION).apply()
+            }
 
-        if (revision >= DEV_DEFAULTS_REVISION) {
-            return
+            for (url in DEVELOPMENT_DEFAULT_MANIFESTS) {
+                val seedKey = "tiveo_default_installed:$url"
+                if (prefs.getBoolean(seedKey, false)) continue
+
+                if (repositories().none { sameDefaultManifest(it.manifestUrl, url) }) {
+                    val repository = try {
+                        PluginRepositoryClient.fetch(url)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        Log.w("PluginStore", "Default plugin manifest unavailable: $url", error)
+                        continue
+                    }
+
+                    synchronized(repositoryWriteLock) {
+                        val installed = repositories()
+                        if (installed.none { sameDefaultManifest(it.manifestUrl, url) }) {
+                            saveRepositories(installed + repository)
+                            PluginRuntimeCache.clear()
+                        }
+                    }
+                }
+
+                // Remember each successful seed so a user can remove it later.
+                prefs.edit().putBoolean(seedKey, true).apply()
+            }
         }
-
-        // No repositories are installed automatically. Remove only the exact
-        // repositories seeded by the earlier revision, once per installation.
-        val retired = repositories().filter { it.manifestUrl in RETIRED_DEFAULT_MANIFESTS }
-        retired.forEach { remove(it.manifestUrl) }
-
-        prefs.edit()
-            .putInt(
-                KEY_DEV_DEFAULTS_REVISION,
-                DEV_DEFAULTS_REVISION,
-            )
-            .apply()
     }
 
     fun isDevelopmentDefault(manifestUrl: String): Boolean =
-        manifestUrl in DEVELOPMENT_DEFAULT_MANIFESTS
+        DEVELOPMENT_DEFAULT_MANIFESTS.any { sameDefaultManifest(manifestUrl, it) }
+
+    private fun sameDefaultManifest(first: String, second: String): Boolean =
+        first.trim().removeSuffix("/").replace("/refs/heads/", "/")
+            .equals(second.replace("/refs/heads/", "/"), ignoreCase = true)
 
     @Synchronized
     fun repositories(): List<PluginRepositoryDescriptor> {
@@ -122,32 +144,20 @@ class PluginStore(context: Context) {
     }
 
     fun upsert(repository: PluginRepositoryDescriptor) {
-        val next = repositories()
-            .filterNot {
-                it.manifestUrl == repository.manifestUrl
-            }
-            .toMutableList()
-
-        next += repository
-        saveRepositories(next)
-        PluginRuntimeCache.clear()
+        synchronized(repositoryWriteLock) {
+            val next = repositories().filterNot { it.manifestUrl == repository.manifestUrl }
+            saveRepositories(next + repository)
+            PluginRuntimeCache.clear()
+        }
     }
 
     fun remove(manifestUrl: String) {
-        saveRepositories(
-            repositories().filterNot {
-                it.manifestUrl == manifestUrl
-            }
-        )
-        prefs.edit()
-            .remove(
-                repositoryEnabledKey(
-                    manifestUrl
-                )
-            )
-            .apply()
-        codeStore.removeRepository(manifestUrl)
-        PluginRuntimeCache.clear()
+        synchronized(repositoryWriteLock) {
+            saveRepositories(repositories().filterNot { it.manifestUrl == manifestUrl })
+            prefs.edit().remove(repositoryEnabledKey(manifestUrl)).apply()
+            codeStore.removeRepository(manifestUrl)
+            PluginRuntimeCache.clear()
+        }
     }
 
     fun isProviderEnabled(
@@ -195,6 +205,7 @@ class PluginStore(context: Context) {
                 }
             }
 
+    @Synchronized
     private fun saveRepositories(
         repositories: List<PluginRepositoryDescriptor>,
     ) {
@@ -236,7 +247,13 @@ class PluginStore(context: Context) {
 
         private const val DEV_DEFAULTS_REVISION = 2
 
-        val DEVELOPMENT_DEFAULT_MANIFESTS: Set<String> = emptySet()
+        private val defaultSeedMutex = Mutex()
+        private val repositoryWriteLock = Any()
+
+        val DEVELOPMENT_DEFAULT_MANIFESTS: Set<String> = setOf(
+            "https://raw.githubusercontent.com/Luckez12/CloudAnime/main/manifest.json",
+            "https://raw.githubusercontent.com/Luckez12/Cloudbank/refs/heads/main/manifest.json",
+        )
 
         private val RETIRED_DEFAULT_MANIFESTS = setOf(
             "https://raw.githubusercontent.com/yoruix/nuvio-providers/refs/heads/main/manifest.json",

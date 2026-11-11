@@ -671,9 +671,9 @@ fun VueoApp(
         }
 
         store.seedDevelopmentDefaultsIfNeeded()
-        pluginStore.seedDevelopmentDefaultsIfNeeded()
 
         launch {
+            pluginStore.seedDevelopmentDefaultsIfNeeded()
             providerCodeSync.syncMissing(
                 pluginStore.repositories()
             )
