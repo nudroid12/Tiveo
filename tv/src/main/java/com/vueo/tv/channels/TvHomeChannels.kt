@@ -90,7 +90,7 @@ object TvHomeChannels {
             val channelId = known?.id ?: run {
                 val logo = requireNotNull(ContextCompat.getDrawable(context, R.drawable.vueo_tv_logo)).toBitmap(256, 256)
                 val channel = PreviewChannel.Builder().setDisplayName(if (kind == "watchlist") "Watchlist" else "For You")
-                    .setDescription("VUEO ${if (kind == "watchlist") "saved titles" else "personal recommendations"}")
+                    .setDescription("Tivio ${if (kind == "watchlist") "saved titles" else "personal recommendations"}")
                     .setInternalProviderId(internalId)
                     .setAppLinkIntent(Intent(Intent.ACTION_VIEW, Uri.parse("virio://channel?kind=$kind"), context, MainActivity::class.java))
                     .setLogo(logo).build()

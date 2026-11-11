@@ -420,7 +420,7 @@ private fun TvManageProfiles(
 
             TvPickerToggleRow(
                 title = "Ask on startup",
-                subtitle = "Show Who's Watching when VUEO launches",
+                subtitle = "Show Who's Watching when Tivio launches",
                 checked = askOnStartup,
                 enabled = profiles.size > 1,
                 onClick = {
@@ -929,9 +929,9 @@ private fun TvProfileBackground(content: @Composable () -> Unit) {
 private fun TvProfileBrand() {
     Image(
         painter = painterResource(R.drawable.virio_wordmark),
-        contentDescription = "Virio",
+        contentDescription = "Tivio",
         contentScale = ContentScale.Fit,
-        modifier = Modifier.width(160.dp).aspectRatio(921f / 260f),
+        modifier = Modifier.width(160.dp).aspectRatio(941f / 260f),
     )
 }
 

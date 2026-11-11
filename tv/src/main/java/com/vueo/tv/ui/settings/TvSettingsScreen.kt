@@ -85,17 +85,17 @@ private data class TvSettingsRootDestination(
 )
 
 private val TvSettingsRootDestinations = listOf(
-    TvSettingsRootDestination(TvSettingsPage.VUEO_SYNC, "vueo-sync", "Account", "VUEO"),
-    TvSettingsRootDestination(TvSettingsPage.PROFILE, "profile", "Profile", "VUEO"),
-    TvSettingsRootDestination(TvSettingsPage.CONTENT_MANAGER, "content-manager", "Content Manager", "VUEO"),
-    TvSettingsRootDestination(TvSettingsPage.ENHANCEMENTS, "enhancements", "Enhancements", "VUEO"),
+    TvSettingsRootDestination(TvSettingsPage.VUEO_SYNC, "vueo-sync", "Account", "Tivio"),
+    TvSettingsRootDestination(TvSettingsPage.PROFILE, "profile", "Profile", "Tivio"),
+    TvSettingsRootDestination(TvSettingsPage.CONTENT_MANAGER, "content-manager", "Content Manager", "Tivio"),
+    TvSettingsRootDestination(TvSettingsPage.ENHANCEMENTS, "enhancements", "Enhancements", "Tivio"),
     TvSettingsRootDestination(TvSettingsPage.PLAYBACK, "playback", "Playback", "PLAYBACK"),
     TvSettingsRootDestination(TvSettingsPage.SUBTITLES, "subtitles", "Subtitles", "PLAYBACK"),
     TvSettingsRootDestination(TvSettingsPage.SOURCES, "sources", "Sources", "PLAYBACK"),
     TvSettingsRootDestination(TvSettingsPage.APPEARANCE, "appearance", "Appearance", "APP"),
     TvSettingsRootDestination(TvSettingsPage.MOTION, "motion", "Motion · Temporary", "APP"),
     TvSettingsRootDestination(TvSettingsPage.DATA_STORAGE, "data-storage", "Data & Storage", "APP"),
-    TvSettingsRootDestination(TvSettingsPage.ABOUT, "about", "About VUEO", "APP"),
+    TvSettingsRootDestination(TvSettingsPage.ABOUT, "about", "About Tivio", "APP"),
     TvSettingsRootDestination(TvSettingsPage.DIAGNOSTICS, "diagnostics", "Diagnostics", "DIAGNOSTICS"),
 )
 

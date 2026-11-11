@@ -877,7 +877,7 @@ internal fun AppearanceSettingsScreen(
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    text = "Accent changes buttons, focus, progress and interactive highlights. VUEO brand lime remains fixed.",
+                    text = "Accent changes buttons, focus, progress and interactive highlights. The Tivio logo keeps its gradient.",
                     color = VueoPalette.Muted,
                     fontSize = 11.sp,
                     maxLines = 3,
@@ -916,8 +916,8 @@ internal fun AppearanceSettingsScreen(
 
         item {
             VueoInfoCard(
-                title = "VUEO identity stays consistent",
-                text = "The official VUEO lime logo and white wordmark do not change with theme or accent.",
+                title = "Tivio identity stays consistent",
+                text = "The Tivio gradient logo keeps its colors across themes and accents.",
             )
         }
     }

@@ -529,7 +529,7 @@ internal fun VueoSettingsHub(
                     }
 
                     item(key = "settings-vueo-group") {
-                        VueoSettingsHubGroup("VUEO") {
+                        VueoSettingsHubGroup("Tivio") {
                             VueoSettingsHubRow("Account", "Account & mobile / TV sync.", "", Icons.Default.Settings, onSync)
                             VueoSettingsHubDivider()
                             VueoSettingsHubRow(
@@ -617,7 +617,7 @@ internal fun VueoSettingsHub(
                             VueoSettingsHubDivider()
                             VueoSettingsHubRow("Data & Storage", "Backup, history, cache & app data.", "Local device data", Icons.Default.VideoLibrary, onDataStorage)
                             VueoSettingsHubDivider()
-                            VueoSettingsHubRow("About VUEO", "Version, updates, privacy & attribution.", BuildConfig.VERSION_NAME, Icons.Default.Settings, onAbout)
+                            VueoSettingsHubRow("About Tivio", "Version, updates, privacy & attribution.", BuildConfig.VERSION_NAME, Icons.Default.Settings, onAbout)
                         }
                     }
 
@@ -626,7 +626,7 @@ internal fun VueoSettingsHub(
                             modifier = Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 8.dp),
                             contentAlignment = Alignment.Center,
                         ) {
-                            Text("VUEO ${BuildConfig.VERSION_NAME}", color = VueoPalette.Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Text("Tivio ${BuildConfig.VERSION_NAME}", color = VueoPalette.Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }

@@ -127,7 +127,7 @@ fun TvUpdatePrompt(
                 val notes = release.changelog.take(4)
                 if (notes.isEmpty()) {
                     TextLine(
-                        text = "Latest VUEO TV development build is ready to install.",
+                        text = "Latest Tivio TV development build is ready to install.",
                         sizeSp = 16,
                         weight = FontWeight.Normal,
                         color = TvDesign.Muted,

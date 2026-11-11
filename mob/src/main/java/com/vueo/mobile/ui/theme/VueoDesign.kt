@@ -149,8 +149,8 @@ internal fun VueoBrandLockup(
 ) {
     Image(
         painter = painterResource(R.drawable.virio_wordmark),
-        contentDescription = "Virio",
-        modifier = modifier.width(if (compact) 94.dp else 124.dp).aspectRatio(921f / 260f),
+        contentDescription = "Tivio",
+        modifier = modifier.width(if (compact) 94.dp else 124.dp).aspectRatio(941f / 260f),
         contentScale = ContentScale.Fit,
     )
 }

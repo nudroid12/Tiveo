@@ -215,7 +215,7 @@ internal fun TvAboutSettings(
     }
 
     val entries = listOf(
-        TvSettingsEntry("vueo", "VUEO", "A universal media player.", BuildConfig.VERSION_NAME, enabled = false, section = "ABOUT", icon = Icons.Default.Settings),
+        TvSettingsEntry("vueo", "Tivio", "A universal media player.", BuildConfig.VERSION_NAME, enabled = false, section = "ABOUT", icon = Icons.Default.Settings),
         TvSettingsEntry("privacy", "Privacy", "Settings and API keys stay on this device. API keys are excluded from backups unless you include them.", "Local", enabled = false, section = "ABOUT"),
         TvSettingsEntry("tmdb", "TMDB Attribution", "This product uses the TMDB API but is not endorsed or certified by TMDB.", "TMDB", enabled = false, section = "ABOUT"),
         TvSettingsEntry(
@@ -235,5 +235,5 @@ internal fun TvAboutSettings(
             icon = Icons.Default.Refresh,
         ),
     )
-    TvSettingsListScreen("About VUEO", "Version, updates and app information.", entries, onNavigate, onProfile, onBack)
+    TvSettingsListScreen("About Tivio", "Version, updates and app information.", entries, onNavigate, onProfile, onBack)
 }
