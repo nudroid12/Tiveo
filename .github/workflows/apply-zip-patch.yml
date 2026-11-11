@@ -1,0 +1,318 @@
+name: Apply ZIP Patch
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "**/*.zip"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: virio-zip-patch
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[zip-applied]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 2
+
+      - name: Find ZIP patch
+        id: zip
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIP_FILE=""
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            ZIP_FILE="$(
+              git diff-tree --no-commit-id --name-only -r HEAD \
+                | grep -Ei '\\.zip$' \
+                | while IFS= read -r candidate; do
+                    if [ -f "$candidate" ]; then
+                      printf '%s\n' "$candidate"
+                    fi
+                  done \
+                | tail -n 1 \
+                || true
+            )"
+          fi
+
+          if [ -z "$ZIP_FILE" ]; then
+            ZIP_FILE="$(
+              find . \
+                -type f \
+                -name '*.zip' \
+                -not -path './.git/*' \
+                -printf '%T@ %p\n' \
+                | sort -nr \
+                | head -n 1 \
+                | cut -d' ' -f2- \
+                | sed 's#^\\./##' \
+                || true
+            )"
+          fi
+
+          if [ -z "$ZIP_FILE" ] || [ ! -f "$ZIP_FILE" ]; then
+            echo "No ZIP patch found."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "ZIP patch: $ZIP_FILE"
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          {
+            echo 'file<<EOF'
+            echo "$ZIP_FILE"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate ZIP
+        if: steps.zip.outputs.found == 'true'
+        shell: bash
+        env:
+          ZIP_FILE: ${{ steps.zip.outputs.file }}
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          import os
+          import stat
+          import zipfile
+          from pathlib import PurePosixPath
+
+          zip_file = os.environ["ZIP_FILE"]
+
+          with zipfile.ZipFile(zip_file) as archive:
+              entries = archive.infolist()
+              if not entries:
+                  raise SystemExit("ZIP is empty.")
+
+              for entry in entries:
+                  if stat.S_ISLNK(entry.external_attr >> 16):
+                      raise SystemExit(f"ZIP cannot contain a symlink: {entry.filename}")
+                  raw = entry.filename.replace("\\\\", "/")
+                  path = PurePosixPath(raw)
+
+                  if path.is_absolute():
+                      raise SystemExit(f"Unsafe absolute path: {raw}")
+                  if ".." in path.parts:
+                      raise SystemExit(f"Unsafe parent traversal: {raw}")
+                  if ".git" in path.parts:
+                      raise SystemExit(f"ZIP cannot modify .git: {raw}")
+
+          print("ZIP validation passed.")
+          PY
+
+      - name: Extract ZIP
+        if: steps.zip.outputs.found == 'true'
+        shell: bash
+        env:
+          ZIP_FILE: ${{ steps.zip.outputs.file }}
+        run: |
+          set -euo pipefail
+
+          rm -rf "$RUNNER_TEMP/virio_zip_patch"
+          mkdir -p "$RUNNER_TEMP/virio_zip_patch"
+          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/virio_zip_patch"
+
+      - name: Resolve ZIP root
+        if: steps.zip.outputs.found == 'true'
+        id: root
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          EXTRACTED="$RUNNER_TEMP/virio_zip_patch"
+          SOURCE_ROOT="$EXTRACTED"
+
+          mapfile -t TOP_ENTRIES < <(
+            find "$EXTRACTED" -mindepth 1 -maxdepth 1 -printf '%f\n'
+          )
+
+          if [ "${#TOP_ENTRIES[@]}" -eq 1 ] && [ -d "$EXTRACTED/${TOP_ENTRIES[0]}" ]; then
+            WRAPPER_NAME="${TOP_ENTRIES[0]}"
+            WRAPPER="$EXTRACTED/$WRAPPER_NAME"
+
+            # App modules are repository-relative paths, never ZIP wrappers.
+            # A module build.gradle.kts alone is not a repository root marker.
+            case "$WRAPPER_NAME" in
+              tv|mob|shared|app|gradle|buildSrc|build-logic|src|tests|.github)
+                echo "Preserving repository directory: $WRAPPER_NAME"
+                ;;
+              *)
+                if [ -f "$WRAPPER/settings.gradle.kts" ] \
+                  || [ -f "$WRAPPER/settings.gradle" ] \
+                  || [ -f "$WRAPPER/gradlew" ]; then
+                  SOURCE_ROOT="$WRAPPER"
+                  echo "Detected repository wrapper folder: $WRAPPER_NAME"
+                fi
+                ;;
+            esac
+          fi
+
+          {
+            echo 'path<<EOF'
+            echo "$SOURCE_ROOT"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate explicit deletions
+        if: steps.zip.outputs.found == 'true'
+        shell: bash
+        env:
+          SOURCE_ROOT: ${{ steps.root.outputs.path }}
+        run: |
+          set -euo pipefail
+
+          DELETE_MANIFEST="$SOURCE_ROOT/.virio-delete-files.txt"
+          if [ ! -f "$DELETE_MANIFEST" ]; then
+            echo "No explicit deletion manifest."
+            exit 0
+          fi
+
+          python3 - <<'PY'
+          import os
+          from pathlib import PurePosixPath
+
+          manifest = PurePosixPath(os.environ["SOURCE_ROOT"]) / ".virio-delete-files.txt"
+          lines = open(str(manifest), encoding="utf-8").read().splitlines()
+          count = 0
+
+          for line_number, raw in enumerate(lines, start=1):
+              path_text = raw.strip()
+              if not path_text or path_text.startswith("#"):
+                  continue
+
+              path = PurePosixPath(path_text)
+              if path.is_absolute():
+                  raise SystemExit(f"Unsafe absolute deletion path at line {line_number}: {path_text}")
+              if path_text.startswith("./"):
+                  raise SystemExit(f"Deletion paths must be repository-relative without ./ at line {line_number}: {path_text}")
+              if ".." in path.parts:
+                  raise SystemExit(f"Unsafe parent traversal at line {line_number}: {path_text}")
+              if ".git" in path.parts:
+                  raise SystemExit(f"Deletion manifest cannot modify .git at line {line_number}: {path_text}")
+              if any(ch in path_text for ch in "*?[]"):
+                  raise SystemExit(f"Globs are not allowed in deletion manifest at line {line_number}: {path_text}")
+              if path_text.endswith("/"):
+                  raise SystemExit(f"Deletion manifest accepts exact file paths only at line {line_number}: {path_text}")
+
+              count += 1
+
+          print(f"Explicit deletion manifest validated: {count} file path(s).")
+          PY
+
+      - name: Apply files to repository
+        if: steps.zip.outputs.found == 'true'
+        shell: bash
+        env:
+          SOURCE_ROOT: ${{ steps.root.outputs.path }}
+        run: |
+          set -euo pipefail
+
+          rsync -a \
+            --exclude '.git/' \
+            --exclude '.virio-delete-files.txt' \
+            "$SOURCE_ROOT/" \
+            ./
+
+      - name: Apply explicit deletions
+        if: steps.zip.outputs.found == 'true'
+        shell: bash
+        env:
+          SOURCE_ROOT: ${{ steps.root.outputs.path }}
+        run: |
+          set -euo pipefail
+
+          DELETE_MANIFEST="$SOURCE_ROOT/.virio-delete-files.txt"
+          if [ ! -f "$DELETE_MANIFEST" ]; then
+            exit 0
+          fi
+
+          while IFS= read -r raw || [ -n "$raw" ]; do
+            path="${raw%$'\r'}"
+            path="${path#"${path%%[![:space:]]*}"}"
+            path="${path%"${path##*[![:space:]]}"}"
+            [ -n "$path" ] || continue
+            case "$path" in
+              \#*) continue ;;
+            esac
+
+            if [ -d "$path" ] && [ ! -L "$path" ]; then
+              echo "::error::Deletion manifest may only name files, not directories: $path"
+              exit 1
+            fi
+
+            if [ -e "$path" ] || [ -L "$path" ]; then
+              echo "Deleting: $path"
+              rm -f -- "$path"
+            else
+              echo "Already absent: $path"
+            fi
+          done < "$DELETE_MANIFEST"
+
+      - name: Remove uploaded ZIP
+        if: steps.zip.outputs.found == 'true'
+        shell: bash
+        env:
+          ZIP_FILE: ${{ steps.zip.outputs.file }}
+        run: |
+          set -euo pipefail
+          rm -f "$ZIP_FILE"
+
+      - name: Show changes
+        if: steps.zip.outputs.found == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git status --short
+
+      - name: Detect repository changes
+        if: steps.zip.outputs.found == 'true'
+        id: changes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit applied patch
+        if: steps.zip.outputs.found == 'true' && steps.changes.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+          git commit -m "chore: apply ZIP patch [zip-applied]"
+          git push origin HEAD:main
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Virio ZIP Patch"
+            echo
+            echo "Upload one ZIP containing repository-relative file paths."
+            echo "The workflow extracts files, overwrites matching paths, applies optional exact-file deletions from .virio-delete-files.txt, removes the ZIP, commits the result, and triggers the Virio build."
+          } >> "$GITHUB_STEP_SUMMARY"
