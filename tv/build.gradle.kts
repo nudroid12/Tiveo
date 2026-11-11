@@ -16,11 +16,22 @@ val vueoKeystorePassword =
     System.getenv("VUEO_KEYSTORE_PASSWORD")
         ?.takeIf { it.isNotBlank() }
 
+val virioUpdateManifestUrl = providers.environmentVariable("GITHUB_REPOSITORY")
+    .map { repository ->
+        if (repository.matches(Regex("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"))) {
+            "https://github.com/$repository/releases/download/virio-dev/tv-update.json"
+        } else {
+            ""
+        }
+    }
+    .getOrElse("")
+
 android {
     namespace = "com.vueo.tv"
     compileSdk = 36
 
     defaultConfig {
+        buildConfigField("String", "UPDATE_MANIFEST_URL", "\"$virioUpdateManifestUrl\"")
         applicationId = "com.virio.tv"
         minSdk = 23
         targetSdk = 36

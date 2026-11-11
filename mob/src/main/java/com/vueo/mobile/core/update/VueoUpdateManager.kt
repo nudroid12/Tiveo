@@ -212,8 +212,7 @@ class VueoUpdateStore(
 
 object VueoUpdateManager {
     // VUEO_DEV_RELEASE_MANIFEST
-    const val DEFAULT_MANIFEST_URL =
-        ""
+    val DEFAULT_MANIFEST_URL = BuildConfig.UPDATE_MANIFEST_URL
 
     private const val MANIFEST_SCHEMA_VERSION =
         1

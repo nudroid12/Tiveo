@@ -59,8 +59,7 @@ private class TvUpdateStore(context: Context) {
 }
 
 object TvUpdateManager {
-    const val DEFAULT_MANIFEST_URL =
-        ""
+    val DEFAULT_MANIFEST_URL = BuildConfig.UPDATE_MANIFEST_URL
 
     private const val CHECK_INTERVAL_MS = 60L * 60L * 1000L
 
