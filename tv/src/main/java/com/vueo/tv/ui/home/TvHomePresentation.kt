@@ -1,9 +1,5 @@
 package com.vueo.tv.home
 
-import com.vueo.tv.ui.motion.*
-import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,7 +10,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -27,14 +22,8 @@ import androidx.compose.ui.unit.IntSize
 import android.os.SystemClock
 import com.vueo.tv.ui.tvPrefetchImage
 import com.vueo.tv.ui.TvDesign
-import com.vueo.tv.ui.tvSidebarContentStartPadding
-import com.vueo.tv.ui.tvSidebarHomeRowsViewportFraction
-import com.vueo.tv.ui.tvSidebarIsPillMode
-import com.vueo.tv.ui.tvSidebarIsHiddenClassic
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.CancellationException
-import com.vueo.shared.core.diagnostics.PerformanceDiagnostics
 import com.vueo.tv.core.TvTitleArtwork
 
 @Composable
@@ -75,47 +64,7 @@ internal fun TvHomePresentation(
     val context = LocalContext.current.applicationContext
     val density = LocalDensity.current
     val logoSize = with(density) { IntSize(220.dp.roundToPx(), 100.dp.roundToPx()) }
-    val contentStartPadding = tvSidebarContentStartPadding(MODERN_HOME_CONTENT_START_PADDING)
-    val floatingPillMode = tvSidebarIsPillMode()
-    val hideClassicSidebar = tvSidebarIsHiddenClassic()
-    val showContinueWatchingPreview = floatingPillMode && navigationVisible
-    val targetRowsViewportFraction = tvSidebarHomeRowsViewportFraction(
-        classic = MODERN_HOME_ROWS_VIEWPORT_FRACTION,
-        pill = if (navigationVisible) 0.32f else MODERN_HOME_ROWS_VIEWPORT_FRACTION,
-    )
-    // One interruptible progress value drives rail height, hero size and copy
-    // position together. A gentle acceleration avoids the abrupt 180ms resize.
-    val menuContentEasing = remember { CubicBezierEasing(0.22f, 0f, 0.18f, 1f) }
-    val rowsViewportFraction by animateFloatAsState(
-        targetValue = targetRowsViewportFraction,
-        animationSpec = tvTunedSpec(TvMotionGroup.TOPBAR, navigationVisible, tween(durationMillis = 340, easing = menuContentEasing)),
-        label = "homeRowsViewportFraction",
-    )
-
-    // Topbar's 340ms viewport resize is intentional. Only record its motion,
-    // making it distinguishable from a real LazyRow/LazyColumn scroll.
-    LaunchedEffect(floatingPillMode, navigationVisible, hideClassicSidebar) {
-        if (!PerformanceDiagnostics.isCollecting()) return@LaunchedEffect
-        PerformanceDiagnostics.captureRuntimeEvent(
-            "HOME_VIEWPORT_TARGET topbar=$floatingPillMode navigation=$navigationVisible " +
-                "hideSidebar=$hideClassicSidebar target=$targetRowsViewportFraction motion=" +
-                if (TvMotionTuning.active(TvMotionGroup.TOPBAR)) TvMotionTuning.get(TvMotionGroup.TOPBAR).toString() else "Original 340ms"
-        )
-        var lastLoggedAt = 0L
-        snapshotFlow { rowsViewportFraction }.collect { fraction ->
-            val now = SystemClock.uptimeMillis()
-            if (lastLoggedAt == 0L || now - lastLoggedAt >= 85L ||
-                kotlin.math.abs(fraction - targetRowsViewportFraction) <= 0.001f
-            ) {
-                PerformanceDiagnostics.captureRuntimeEvent(
-                    "HOME_VIEWPORT_PROGRESS fraction=" +
-                        String.format(java.util.Locale.US, "%.4f", fraction) +
-                        " target=" + String.format(java.util.Locale.US, "%.4f", targetRowsViewportFraction)
-                )
-                lastLoggedAt = now
-            }
-        }
-    }
+    val contentStartPadding = MODERN_HOME_CONTENT_START_PADDING
 
     LaunchedEffect(rows) {
         val currentKey = focusedEntry?.key
@@ -210,15 +159,15 @@ internal fun TvHomePresentation(
             .background(TvDesign.Black),
     ) {
         val screenHeight = maxHeight
-        val rowsViewportHeight = screenHeight * rowsViewportFraction.coerceIn(.05f, .95f)
+        val rowsViewportHeight = screenHeight * MODERN_HOME_ROWS_VIEWPORT_FRACTION
         val heroHeight = (screenHeight - rowsViewportHeight + 38.dp).coerceAtMost(screenHeight)
 
         TvModernHomeHero(
             scene = heroScene,
             heroHeight = heroHeight,
             rowsViewportHeight = rowsViewportHeight,
-            stableHeroHeight = (screenHeight * 0.68f + 38.dp).coerceAtMost(screenHeight),
-            stableRowsViewportHeight = screenHeight * MODERN_HOME_ROWS_VIEWPORT_FRACTION,
+            stableHeroHeight = heroHeight,
+            stableRowsViewportHeight = rowsViewportHeight,
         )
 
         when {
@@ -226,7 +175,7 @@ internal fun TvHomePresentation(
                 TvModernHomeRows(
                     rows = rows,
                     rowsViewportHeight = rowsViewportHeight,
-                    showContinueWatchingPreview = showContinueWatchingPreview,
+                    showContinueWatchingPreview = false,
                     contentFocusRequester = contentFocusRequester,
                     focusResetToken = focusResetToken,
                     contentReturnToken = contentReturnToken,
@@ -240,11 +189,7 @@ internal fun TvHomePresentation(
                     onContentFocused = onContentFocused,
                     onVerticalMotionChanged = { verticalMotionActive = it },
                     onUpFromFirstRow = onOpenNavigation,
-                    onLeftAtRowStart = when {
-                        floatingPillMode -> ({ /* Topbar keeps Left on the first card. */ })
-                        hideClassicSidebar -> onOpenNavigation
-                        else -> null
-                    },
+                    onLeftAtRowStart = {},
                     onFocused = { row, index, entry ->
                         TvHomeFocusMemory.activeRowKey = row.key
                         TvHomeFocusMemory.focusedIndexByRow[row.key] = index
@@ -307,7 +252,7 @@ internal fun TvHomePresentation(
                 onContentFocused = onContentFocused,
                 onRetry = onRetry,
                 modifier = Modifier.align(Alignment.TopEnd)
-                    .padding(top = 24.dp, end = 48.dp).widthIn(max = 360.dp),
+                    .padding(top = 68.dp, end = 40.dp).widthIn(max = 360.dp),
             )
         }
     }

@@ -76,7 +76,6 @@ import com.vueo.shared.core.diagnostics.PerformanceDiagnostics
 import com.vueo.tv.ui.TvDesign
 import com.vueo.tv.ui.TvNetworkImage
 import com.vueo.tv.ui.tvPosterActivation
-import com.vueo.tv.ui.tvSidebarContentStartPadding
 import com.vueo.tv.ui.motion.TvMotion
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
@@ -664,7 +663,7 @@ private fun TvModernHomeRow(
 
     val density = LocalDensity.current
     val defaultBringIntoViewSpec = LocalBringIntoViewSpec.current
-    val rowHorizontalPadding = tvSidebarContentStartPadding(MODERN_HOME_CONTENT_START_PADDING)
+    val rowHorizontalPadding = MODERN_HOME_CONTENT_START_PADDING
     // Reserve paint space for the 1.022x focus scale without moving the cards.
     val focusPaintInset = if (row.kind == TvHomeRowKind.CONTINUE_WATCHING) 4.dp else 0.dp
 
@@ -966,10 +965,8 @@ private fun TvModernHomeCard(
     onHold: () -> Unit,
 ) {
     var focused by remember(entry.key) { mutableStateOf(false) }
-    // Nuvio's catalog cards keep their geometry on focus. Preserve the
-    // existing Continue Watching treatment outside the poster comparison.
     val animatedScale by animateFloatAsState(
-        targetValue = if (focused) tvTunedFocusScale(if (kind == TvHomeRowKind.CONTINUE_WATCHING) 1.022f else 1f) else 1f,
+        targetValue = if (focused) tvTunedFocusScale(if (kind == TvHomeRowKind.CONTINUE_WATCHING) 1.022f else 1.035f) else 1f,
         animationSpec = tvTunedSpec(TvMotionGroup.FOCUS, focused, tween(
             durationMillis = if (focused) TvMotion.FOCUS_IN_MS else TvMotion.FOCUS_OUT_MS,
             easing = TvMotion.EaseOut,

@@ -5,10 +5,10 @@ import com.vueo.shared.core.storage.LibraryPlaybackEntry
 import androidx.compose.ui.unit.dp
 
 internal const val MODERN_HOME_HERO_TEXT_WIDTH_FRACTION = 0.42f
-internal const val MODERN_HOME_HERO_MEDIA_WIDTH_FRACTION = 0.72f
-internal const val MODERN_HOME_ROWS_VIEWPORT_FRACTION = 0.52f
+internal const val MODERN_HOME_HERO_MEDIA_WIDTH_FRACTION = 0.86f
+internal const val MODERN_HOME_ROWS_VIEWPORT_FRACTION = 0.40f
 internal const val MODERN_HOME_HERO_FOCUS_SETTLE_MS = 450L
-internal val MODERN_HOME_CONTENT_START_PADDING = 96.dp
+internal val MODERN_HOME_CONTENT_START_PADDING = 40.dp
 
 /** One resolved item supplies both hero planes; navigation never waits for it. */
 internal data class TvHomeHeroScene(

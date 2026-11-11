@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
@@ -43,7 +42,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.vueo.tv.ui.TvDesign
 import com.vueo.tv.ui.TvNetworkImage
-import com.vueo.tv.ui.tvSidebarContentStartPadding
 import com.vueo.tv.ui.motion.TvMotion
 
 /**
@@ -63,7 +61,7 @@ internal fun TvModernHomeHero(
     stableRowsViewportHeight: Dp,
     modifier: Modifier = Modifier,
 ) {
-    val contentStartPadding = tvSidebarContentStartPadding(MODERN_HOME_CONTENT_START_PADDING)
+    val contentStartPadding = MODERN_HOME_CONTENT_START_PADDING
     val density = LocalDensity.current
     val visibleHeroHeightPx = with(density) { heroHeight.toPx() }
     val stableHeroHeightPx = with(density) { stableHeroHeight.toPx() }
@@ -100,7 +98,6 @@ internal fun TvModernHomeHero(
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .offset(x = 56.dp)
                 .fillMaxWidth(MODERN_HOME_HERO_MEDIA_WIDTH_FRACTION)
                 .height(stableHeroHeight),
         ) {

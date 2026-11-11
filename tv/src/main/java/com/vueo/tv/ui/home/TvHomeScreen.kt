@@ -27,9 +27,7 @@ import com.vueo.shared.core.storage.ContinueWatchingMetadataRefresh
 import com.vueo.shared.core.storage.LibraryPlaybackEntry
 import com.vueo.tv.core.TvRuntime
 import com.vueo.tv.core.TvTitleArtwork
-import com.vueo.tv.ui.TvPrimaryDestinations
 import com.vueo.tv.ui.TvPosterActionDialog
-import com.vueo.tv.ui.TvSidebar
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -77,13 +75,6 @@ class TvHomeRetainedState internal constructor(runtime: TvRuntime) {
 fun rememberTvHomeRetainedState(runtime: TvRuntime): TvHomeRetainedState =
     remember(runtime) { TvHomeRetainedState(runtime) }
 
-/**
- * Home's VUEO boundary.
- *
- * Runtime/data/routing stay VUEO. Everything below this boundary is the new
- * Home presentation and focus system. The shared sidebar is intentionally
- * left untouched in 32B because sidebar redesign is being handled separately.
- */
 @Composable
 fun TvHomeScreen(
     runtime: TvRuntime,
@@ -352,27 +343,25 @@ fun TvHomeScreen(
 
     val contentFocusRequester = remember { FocusRequester() }
 
-    // Sidebar is held as-is for now. New Home content only interacts with it
-    // through this one focus boundary.
-    val navRequesters = remember { TvPrimaryDestinations.associateWith { FocusRequester() } }
-    val profileRequester = remember { FocusRequester() }
+    val homeTabRequester = remember { FocusRequester() }
     var navExpanded by remember { mutableStateOf(false) }
-    // Opening a hidden navigation panel is asynchronous. Keep the current
-    // poster focusable until a real navigation item has accepted focus;
-    // revoking it earlier makes Compose relocate focus inside the LazyRow.
     var navigationOwnsFocus by remember { mutableStateOf(false) }
     var contentReturnToken by remember { mutableIntStateOf(0) }
     val routeReturnPending = retainedState.routeFocusAnchor != null
 
-    fun focusSidebar() {
-        if (!navExpanded) navigationOwnsFocus = false
+    fun focusTopBar() {
         navExpanded = true
-        // TvSidebar requests focus only after the expanding panel has composed.
-        // An eager request here can target a hidden/unfocusable Topbar/rail.
+    }
+
+    LaunchedEffect(active, navExpanded, routeReturnPending, actionEntry) {
+        if (active && navExpanded && !routeReturnPending && actionEntry == null) {
+            withFrameNanos { }
+            homeTabRequester.requestFocus()
+        }
     }
 
     BackHandler(enabled = active) {
-        if (navExpanded) onBack() else focusSidebar()
+        if (navExpanded) onBack() else focusTopBar()
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -405,38 +394,30 @@ fun TvHomeScreen(
                 navigationOwnsFocus = false
                 navExpanded = false
             },
-            onOpenNavigation = ::focusSidebar,
+            onOpenNavigation = ::focusTopBar,
             // Rows captures the retained anchor before this changes routes.
             onOpen = { entry -> entry.open(onOpenMedia, onResume, onOpenCollection) },
             onLongClick = { entry -> if (entry !is TvHomeEntry.Folder) actionEntry = entry },
             modifier = Modifier.fillMaxSize(),
         )
 
-        TvSidebar(
-            selected = "Home",
-            expanded = navExpanded,
-            navRequesters = navRequesters,
-            profileRequester = profileRequester,
+        VirioHomeTopBar(
+            homeRequester = homeTabRequester,
+            canFocus = active && !routeReturnPending && actionEntry == null,
             onFocused = {
-                if (active && !routeReturnPending && actionEntry == null) {
-                    navigationOwnsFocus = true
-                    navExpanded = true
-                }
+                navigationOwnsFocus = true
+                navExpanded = true
             },
             onNavigate = onNavigate,
             onProfile = onProfile,
             onReturnToContent = {
                 if (rows.isNotEmpty()) {
-                    // Keep menu focus until the saved row/card is placed and receives focus.
                     contentReturnToken += 1
-                    true
                 } else {
-                    navigationOwnsFocus = false
-                    navExpanded = false
-                    runCatching { contentFocusRequester.requestFocus() }.getOrDefault(false)
+                    runCatching { contentFocusRequester.requestFocus() }
                 }
             },
-            modifier = Modifier.align(Alignment.CenterStart),
+            modifier = Modifier.align(Alignment.TopStart),
         )
     }
 
