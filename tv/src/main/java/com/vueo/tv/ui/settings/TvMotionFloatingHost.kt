@@ -1,0 +1,172 @@
+package com.vueo.tv.settings
+
+import android.view.WindowManager
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import com.vueo.tv.ui.LocalTvModalFocusHost
+import com.vueo.tv.ui.TvDesign
+import com.vueo.tv.ui.motion.TvMotionGroup
+import com.vueo.tv.ui.motion.TvMotionTuning
+import kotlin.math.roundToInt
+
+/** Session-only visibility; closing the tool does not disable the tuned motion. */
+internal object TvMotionBubble {
+    var visible by mutableStateOf(false)
+    var expanded by mutableStateOf(false)
+    var focusAccess by mutableStateOf(false)
+    var dockLeft by mutableStateOf(false)
+    val selectedGroup = mutableStateOf(TvMotionGroup.FORWARD)
+    fun open() { visible = true; expanded = true; focusAccess = false }
+    fun focusBubble() { visible = true; expanded = false; focusAccess = true }
+    fun hide() { expanded = false; focusAccess = false }
+    fun close() { expanded = false; visible = false; focusAccess = false }
+}
+
+@Composable
+internal fun TvMotionFloatingHost() {
+    val context = LocalContext.current.applicationContext
+    val density = LocalDensity.current
+    val diameter = with(density) { 56.dp.toPx() }
+    val dropRadius = with(density) { 76.dp.toPx() }
+    var bounds by remember { mutableStateOf(IntSize.Zero) }
+    var position by remember { mutableStateOf<Offset?>(null) }
+    var dragging by remember { mutableStateOf(false) }
+    var bubbleFocused by remember { mutableStateOf(false) }
+    val bubbleRequester = remember { FocusRequester() }
+    val host = LocalTvModalFocusHost.current
+    fun close() { TvMotionTuning.save(context); TvMotionBubble.close() }
+    if (!TvMotionBubble.visible) return
+    val ownsFocus = TvMotionBubble.focusAccess || TvMotionBubble.expanded
+    DisposableEffect(host, ownsFocus) {
+        if (ownsFocus) host?.open?.invoke()
+        onDispose { if (ownsFocus) host?.close?.invoke() }
+    }
+    BackHandler(enabled = TvMotionBubble.focusAccess && !TvMotionBubble.expanded) { TvMotionBubble.hide() }
+    LaunchedEffect(TvMotionBubble.focusAccess, bounds) {
+        if (TvMotionBubble.focusAccess && bounds != IntSize.Zero) {
+            withFrameNanos { }
+            runCatching { bubbleRequester.requestFocus() }
+        }
+    }
+    Box(Modifier.fillMaxSize().onSizeChanged { bounds = it }) {
+        val maxX = (bounds.width - diameter).coerceAtLeast(0f)
+        val maxY = (bounds.height - diameter).coerceAtLeast(0f)
+        val actual = (position ?: Offset(maxX - diameter / 2f, diameter / 2f)).let {
+            Offset(it.x.coerceIn(0f, maxX), it.y.coerceIn(0f, maxY))
+        }
+        val target = Offset(bounds.width / 2f, bounds.height - diameter)
+        val overTarget = (actual + Offset(diameter / 2f, diameter / 2f) - target).getDistance() <= dropRadius
+        if (!TvMotionBubble.expanded) {
+            if (dragging) Box(
+                Modifier.align(Alignment.BottomCenter).padding(bottom = 28.dp).size(64.dp)
+                    .background(if (overTarget) TvDesign.Accent else TvDesign.SurfaceRaised, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) { Text("×", color = if (overTarget) TvDesign.Black else TvDesign.White, fontSize = 30.sp) }
+            Box(
+                Modifier.offset { IntOffset(actual.x.roundToInt(), actual.y.roundToInt()) }.size(56.dp)
+                    .focusRequester(bubbleRequester)
+                    .focusProperties {
+                        canFocus = TvMotionBubble.focusAccess
+                        up = FocusRequester.Cancel
+                        down = FocusRequester.Cancel
+                        left = FocusRequester.Cancel
+                        right = FocusRequester.Cancel
+                    }
+                    .onPreviewKeyEvent { event ->
+                        if (event.nativeKeyEvent.keyCode != android.view.KeyEvent.KEYCODE_BACK) false
+                        else {
+                            if (event.type == KeyEventType.KeyUp && !event.nativeKeyEvent.isCanceled) TvMotionBubble.hide()
+                            true
+                        }
+                    }
+                    .background(TvDesign.Accent, CircleShape)
+                    .border(if (bubbleFocused) 3.dp else 0.dp, TvDesign.White, CircleShape)
+                    .onFocusChanged { bubbleFocused = it.isFocused }
+                    .pointerInput(bounds, diameter, dropRadius) {
+                        detectDragGestures(
+                            onDragStart = { dragging = true },
+                            onDragCancel = { dragging = false },
+                            onDragEnd = {
+                                val p = position ?: actual
+                                if ((p + Offset(diameter / 2f, diameter / 2f) - target).getDistance() <= dropRadius) close()
+                                dragging = false
+                            },
+                            onDrag = { change, delta ->
+                                change.consume()
+                                val p = (position ?: actual) + delta
+                                position = Offset(p.x.coerceIn(0f, maxX), p.y.coerceIn(0f, maxY))
+                            },
+                        )
+                    }
+                    .clickable { TvMotionBubble.open() },
+                contentAlignment = Alignment.Center,
+            ) { Text("M", color = TvDesign.Black, fontSize = 22.sp) }
+        }
+    }
+    if (TvMotionBubble.expanded) TvMotionFloatingWorkspace(onClose = ::close)
+}
+
+@Composable
+private fun TvMotionFloatingWorkspace(onClose: () -> Unit) {
+    Dialog(
+        onDismissRequest = { TvMotionBubble.hide() },
+        properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false),
+    ) {
+        val window = (LocalView.current.parent as? DialogWindowProvider)?.window
+        DisposableEffect(window) {
+            val originalDim = window?.attributes?.dimAmount
+            val wasDimmed = window?.attributes?.flags?.and(WindowManager.LayoutParams.FLAG_DIM_BEHIND) != 0
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            onDispose {
+                if (wasDimmed) window?.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+                originalDim?.let { window?.setDimAmount(it) }
+            }
+        }
+        Box(Modifier.fillMaxSize(), contentAlignment = if (TvMotionBubble.dockLeft) Alignment.CenterStart else Alignment.CenterEnd) {
+            Column(
+                Modifier.padding(12.dp).width(360.dp).fillMaxHeight(.90f)
+                    .background(TvDesign.SurfaceRaised, RoundedCornerShape(16.dp))
+                    .border(1.dp, TvDesign.Muted.copy(alpha = .35f), RoundedCornerShape(16.dp)).padding(12.dp),
+            ) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Motion", color = TvDesign.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
+                    TvMotionCompactButton(if (TvMotionBubble.dockLeft) "Dock →" else "← Dock") { TvMotionBubble.dockLeft = !TvMotionBubble.dockLeft }
+                    TvMotionCompactButton("Hide") { TvMotionBubble.hide() }
+                    TvMotionCompactButton("Close", onClick = onClose)
+                }
+                Spacer(Modifier.height(6.dp))
+                TvMotionSettings({}, {}, { TvMotionBubble.hide() }, floating = true)
+            }
+        }
+    }
+}

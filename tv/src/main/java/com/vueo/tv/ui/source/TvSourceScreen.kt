@@ -1,0 +1,231 @@
+package com.vueo.tv.source
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import com.vueo.shared.core.media.EpisodeItem
+import com.vueo.shared.core.media.MediaItem
+import com.vueo.shared.core.media.StreamSource
+import com.vueo.shared.core.player.PlayerSourcePolicy
+import com.vueo.tv.core.TvRuntime
+import com.vueo.tv.core.TvSourceBundle
+import java.net.URI
+
+/**
+ * TV 35A Source boundary.
+ *
+ * This file now owns only VUEO discovery/ranking/settings/playback semantics.
+ * The previous 29F Compose presentation was removed. TV layout, focus and
+ * source-card presentation live in TvSourcePresentation.kt and are rebuilt
+ * using the supplied Vueo StreamScreen as the interaction/layout reference.
+ */
+@Composable
+fun TvSourceScreen(
+    active: Boolean = true,
+    runtime: TvRuntime,
+    media: MediaItem,
+    episode: EpisodeItem?,
+    discovery: com.vueo.tv.core.TvSourceDiscoverySnapshot?,
+    discoveryRunning: Boolean,
+    discoveryError: String?,
+    onBack: () -> Unit,
+    onRefresh: () -> Unit,
+    onStop: () -> Unit,
+    onPlay: (TvSourceBundle, StreamSource) -> Unit,
+) {
+    BackHandler(enabled = active, onBack = onBack)
+
+    val memoryKey = remember(media.id, media.type, episode?.id) {
+        "${media.type}:${media.id}:${episode?.id ?: media.id}"
+    }
+    val memory = remember(memoryKey) { TvSourceUiMemory.forKey(memoryKey) }
+    val returnFocusKey = remember(memoryKey) { memory.focusedSourceKey }
+
+    val bundle = discovery?.bundle
+    val searching = discovery?.searching ?: discoveryRunning
+    val scanStart = discovery?.scanBudgetStartMs ?: 0L
+    val scanBudget = discovery?.scanBudgetMs ?: 0L
+    var scanElapsed by remember(scanStart, scanBudget) { mutableStateOf(0L) }
+    LaunchedEffect(scanStart, scanBudget) {
+        if (scanStart > 0L && scanBudget > 0L) {
+            while (true) {
+                scanElapsed = (android.os.SystemClock.elapsedRealtime() - scanStart).coerceIn(0L, scanBudget)
+                kotlinx.coroutines.delay(250L)
+            }
+        }
+    }
+    val progress = (discovery?.progress ?: "Starting source discovery…") +
+        if (scanStart > 0L && scanBudget > 0L) " • ${scanElapsed / 1000}/${scanBudget / 1000}s" else ""
+    val rawCount = discovery?.rawCount ?: 0
+    val notice = discovery?.notice
+    val firstResultMs = discovery?.firstResultMs
+    val providerOrder = discovery?.providerOrder.orEmpty()
+    val loadingProviders = discovery?.loadingProviders.orEmpty().toSet()
+    val runningProviders = discovery?.runningProviders.orEmpty().toSet()
+    val completedProviders = discovery?.completedSourceProviders.orEmpty().toSet()
+    val cancelledProviders = discovery?.cancelledProviders.orEmpty().toSet()
+    val skippedProviders = discovery?.skippedProviders.orEmpty().toSet()
+    val fromCache = discovery?.fromCache ?: false
+    val error = discoveryError
+    var selectedProvider by remember(memoryKey) {
+        mutableStateOf(memory.selectedProvider ?: SOURCE_PROVIDER_ALL)
+    }
+    var showEngineDetails by remember(memoryKey) {
+        mutableStateOf(memory.showEngineDetails)
+    }
+
+    val preferredQuality = runtime.settingsStore.preferredQuality().rankKey
+
+    val playable = bundle?.sources.orEmpty()
+        .filter(StreamSource::isDirectPlayable)
+        .distinctBy { it.url.orEmpty().trim() }
+    val rankedSources = remember(playable, preferredQuality, media.originalLanguage) {
+        playable.sortedWith(
+            PlayerSourcePolicy.comparator(
+                preferredQuality = preferredQuality,
+                originalLanguage = media.originalLanguage,
+            )
+        )
+    }
+    val currentProviders = remember(rankedSources) {
+        rankedSources
+            .asSequence()
+            .map(::sourceProviderKey)
+            .distinct()
+            .toList()
+    }
+    val visibleProviders = remember(providerOrder, loadingProviders, currentProviders, runningProviders, completedProviders, cancelledProviders, skippedProviders) {
+        (providerOrder.filter { it in currentProviders || it in loadingProviders || it in completedProviders } +
+            loadingProviders.filter { it !in providerOrder } +
+            currentProviders.filter { it !in providerOrder && it !in loadingProviders } +
+            completedProviders.filter { it !in providerOrder && it !in loadingProviders && it !in currentProviders })
+            .plus(cancelledProviders).plus(skippedProviders)
+            .filter { it in loadingProviders || it in currentProviders }
+            .distinct()
+            .sortedBy { provider ->
+                when {
+                    provider in cancelledProviders || provider in skippedProviders -> 3
+                    provider in completedProviders || provider !in loadingProviders -> 0
+                    provider in runningProviders -> 1
+                    else -> 2
+                }
+            }
+    }
+    val providerLogos = remember(runtime, currentProviders) {
+        buildProviderLogoLookup(runtime)
+    }
+
+    LaunchedEffect(visibleProviders) {
+        if (
+            selectedProvider != SOURCE_PROVIDER_ALL &&
+            selectedProvider !in visibleProviders
+        ) {
+            selectedProvider = SOURCE_PROVIDER_ALL
+            memory.selectedProvider = SOURCE_PROVIDER_ALL
+        }
+    }
+
+    val filteredSources = remember(rankedSources, selectedProvider) {
+        if (selectedProvider == SOURCE_PROVIDER_ALL) rankedSources
+        else rankedSources.filter { sourceProviderKey(it) == selectedProvider }
+    }
+
+    TvSourcePresentation(
+        active = active,
+        initialFocusedSourceKey = returnFocusKey,
+        state = TvSourcePresentationState(
+            media = media,
+            episode = episode,
+            bundle = bundle,
+            searching = searching,
+            progress = progress,
+            rawCount = rawCount,
+            notice = notice,
+            firstResultMs = firstResultMs,
+            fromCache = fromCache,
+            error = error,
+            rankedSources = rankedSources,
+            filteredSources = filteredSources,
+            visibleProviders = visibleProviders,
+            loadingProviders = loadingProviders,
+            runningProviders = runningProviders,
+            cancelledProviders = cancelledProviders,
+            skippedProviders = skippedProviders,
+            providerLogos = providerLogos,
+            selectedProvider = selectedProvider,
+            preferredQuality = preferredQuality,
+            showEngineDetails = showEngineDetails,
+        ),
+        onSelectProvider = { provider ->
+            selectedProvider = provider
+            memory.selectedProvider = provider
+        },
+        onToggleDetails = {
+            showEngineDetails = !showEngineDetails
+            memory.showEngineDetails = showEngineDetails
+        },
+        onRefresh = onRefresh,
+        onStop = onStop,
+        onSourceFocused = { source ->
+            memory.focusedSourceKey = sourceStableKey(source)
+            memory.selectedProvider = selectedProvider
+        },
+        onPlay = { source ->
+            bundle?.takeIf { source.isDirectPlayable }?.let { onPlay(it, source) }
+        },
+    )
+}
+
+private fun buildProviderLogoLookup(runtime: TvRuntime): Map<String, String> =
+    buildMap {
+        for (addon in runtime.engine.stremioAddons()) {
+            val descriptor = addon.descriptor
+            val logo = descriptor.logo?.trim()?.takeIf(String::isNotBlank) ?: continue
+            for (key in listOf(descriptor.name, descriptor.id, descriptor.installationId)) {
+                val normalized = key.trim().lowercase()
+                if (normalized !in this) put(normalized, logo)
+            }
+        }
+        for (repository in runtime.pluginStore.repositories()) {
+            for (provider in repository.providers) {
+                val logo = resolveProviderLogoUrl(
+                    baseUrl = repository.baseUrl,
+                    value = provider.logo,
+                ) ?: continue
+                val keys = listOf(
+                    "${repository.name} / ${provider.name}",
+                    provider.name,
+                    provider.id,
+                )
+                for (key in keys) {
+                    val normalized = key.trim().lowercase()
+                    if (normalized !in this) put(normalized, logo)
+                }
+            }
+        }
+    }
+
+private fun resolveProviderLogoUrl(
+    baseUrl: String,
+    value: String?,
+): String? {
+    val raw = value?.trim()?.takeIf(String::isNotBlank) ?: return null
+    val resolved = if (
+        raw.startsWith("https://", ignoreCase = true) ||
+        raw.startsWith("http://", ignoreCase = true)
+    ) {
+        raw
+    } else {
+        runCatching {
+            URI(baseUrl.trimEnd('/') + "/").resolve(raw).toString()
+        }.getOrNull()
+    }
+    return resolved?.takeIf {
+        it.startsWith("https://", ignoreCase = true) ||
+            it.startsWith("http://", ignoreCase = true)
+    }
+}

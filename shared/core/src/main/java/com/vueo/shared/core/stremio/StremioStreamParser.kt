@@ -1,0 +1,200 @@
+package com.vueo.shared.core.stremio
+
+import com.vueo.shared.core.source.SourceCandidate
+import com.vueo.shared.core.source.SubtitleCandidate
+import org.json.JSONArray
+import org.json.JSONObject
+
+object StremioStreamParser {
+    fun parseSources(
+        payload: String,
+        manifest: StremioManifest,
+    ): List<SourceCandidate> {
+        val streams = JSONObject(payload).optJSONArray("streams") ?: JSONArray()
+        return (0 until streams.length()).mapNotNull { index ->
+            val item = streams.optJSONObject(index) ?: return@mapNotNull null
+            val streamUrl = item.optString("url")
+                .trim()
+                .takeIf(String::isNotBlank)
+            val infoHash = item.optString("infoHash")
+                .trim()
+                .takeIf(String::isNotBlank)
+
+            if (streamUrl == null && infoHash == null) {
+                return@mapNotNull null
+            }
+
+            // Addons use name for the server and title/description for release details.
+            // Keep all text instead of discarding name when title is present.
+            val rawName = item.sourceText("name")
+            val rawTitle = item.sourceText("title")
+            val description = item.sourceText("description")
+            val explicitServer = listOf("serverName", "server", "extractor", "host")
+                .firstNotNullOfOrNull { item.sourceText(it) }
+            val server = explicitServer ?: rawName
+                ?.takeIf { (rawTitle != null || description != null) && it != rawTitle && it != description }
+                ?.let { com.vueo.shared.core.source.SourceDisplayText.details(it, manifest.name, null) }
+            val title = listOfNotNull(rawTitle, description, rawName)
+                .flatMap(com.vueo.shared.core.source.SourceDisplayText::lines)
+                .distinctBy { it.lowercase() }
+                .joinToString("\n")
+                .let { com.vueo.shared.core.source.SourceDisplayText.details(it, manifest.name, server) }
+                ?: manifest.name
+            val metadataText = listOfNotNull(rawName, rawTitle, description).joinToString("\n")
+            val behaviorHints = item.optJSONObject("behaviorHints")
+            val requestHeaders = behaviorHints
+                ?.optJSONObject("proxyHeaders")
+                ?.optJSONObject("request")
+                .toStringMap().filterKeys { !it.equals("Range", true) }
+            val videoSize = behaviorHints
+                ?.optLong("videoSize", -1L)
+                ?.takeIf { it > 0L }
+
+            SourceCandidate(
+                id = "${manifest.id}:stream:$index",
+                name = title,
+                url = streamUrl,
+                infoHash = infoHash,
+                fileIndex = item.optInt("fileIdx", -1).takeIf { it >= 0 },
+                quality = item.sourceText("quality") ?: inferQuality(metadataText),
+                codec = item.sourceText("codec") ?: inferCodec(metadataText),
+                hdr = item.sourceText("hdr") ?: inferHdr(metadataText),
+                audio = item.optString("audio")
+                    .takeIf { it.isNotBlank() },
+                language = listOf(
+                    "language",
+                    "lang",
+                    "audioLanguage",
+                    "audio_language",
+                ).firstNotNullOfOrNull { field ->
+                    item.optString(field)
+                        .trim()
+                        .takeIf { it.isNotBlank() }
+                },
+                sizeBytes = videoSize,
+                headers = requestHeaders,
+                mimeType = item.sourceText("mimeType"),
+                subtitles = parseSubtitleItems(
+                    item.optJSONArray("subtitles") ?: JSONArray(), manifest,
+                ).map { subtitle -> com.vueo.shared.core.media.SubtitleTrack(
+                    id = subtitle.id, language = subtitle.language, url = subtitle.url,
+                    providerId = subtitle.providerId, providerName = subtitle.providerName,
+                    name = subtitle.name, mimeType = subtitle.mimeType, displayId = subtitle.displayId,
+                    headers = subtitle.headers,
+                ) },
+                addonHints = com.vueo.shared.core.media.AddonStreamHints(
+                    filename = behaviorHints?.sourceText("filename"),
+                    videoHash = behaviorHints?.sourceText("videoHash"),
+                    bingeGroup = behaviorHints?.sourceText("bingeGroup"),
+                    notWebReady = behaviorHints?.optBoolean("notWebReady", false) == true,
+                    responseHeaders = behaviorHints?.optJSONObject("proxyHeaders")?.optJSONObject("response").toStringMap(),
+                ),
+                providerId = manifest.id,
+                providerName = manifest.name,
+                serverName = server,
+            )
+        }
+    }
+
+    fun parseSubtitles(
+        payload: String,
+        manifest: StremioManifest,
+    ): List<SubtitleCandidate> {
+        return parseSubtitleItems(JSONObject(payload).optJSONArray("subtitles") ?: JSONArray(), manifest)
+    }
+
+    private fun parseSubtitleItems(subtitles: JSONArray, manifest: StremioManifest): List<SubtitleCandidate> {
+        return (0 until subtitles.length()).mapNotNull { index ->
+            val item = subtitles.optJSONObject(index) ?: return@mapNotNull null
+            val url = item.optString("url")
+                .trim()
+                .takeIf(String::isNotBlank)
+                ?: return@mapNotNull null
+            if (!StremioUrls.isHttpUrl(url)) return@mapNotNull null
+            val language = listOf(
+                "lang",
+                "language",
+                "languageCode",
+                "locale",
+                "label",
+            ).firstNotNullOfOrNull { field ->
+                item.optString(field)
+                    .trim()
+                    .takeIf { it.isNotBlank() }
+            } ?: "und"
+            val sourceId = item.optString("id", language)
+                .trim()
+                .ifBlank { language }
+            val mimeType = listOf(
+                "mimeType",
+                "mime",
+                "format",
+            ).firstNotNullOfOrNull { field ->
+                item.optString(field)
+                    .trim()
+                    .takeIf { it.isNotBlank() }
+            }
+
+            SubtitleCandidate(
+                id = "${manifest.id}:$index:$sourceId",
+                language = language,
+                url = url,
+                providerId = manifest.id,
+                providerName = manifest.name,
+                name = item.optString(
+                    "title",
+                    item.optString("name"),
+                ).takeIf { it.isNotBlank() },
+                mimeType = mimeType,
+                displayId = item.sourceText("displayId"),
+                headers = item.optJSONObject("headers").toStringMap(),
+            )
+        }
+    }
+
+    private fun JSONObject.sourceText(field: String): String? =
+        if (isNull(field)) null else optString(field).trim().takeIf(String::isNotBlank)
+
+    private fun JSONObject?.toStringMap(): Map<String, String> {
+        if (this == null) return emptyMap()
+        return buildMap {
+            keys().forEach { key ->
+                optString(key)
+                    .takeIf(String::isNotBlank)
+                    ?.let { put(key, it) }
+            }
+        }
+    }
+
+    private fun inferQuality(text: String): String? {
+        val value = text.lowercase()
+        return when {
+            "2160" in value || "4k" in value -> "4K"
+            "1080" in value -> "1080p"
+            "720" in value -> "720p"
+            "480" in value -> "480p"
+            else -> null
+        }
+    }
+
+    private fun inferCodec(text: String): String? {
+        val value = text.lowercase()
+        return when {
+            "av1" in value -> "AV1"
+            "hevc" in value || "h265" in value || "h.265" in value || "x265" in value -> "HEVC"
+            "h264" in value || "h.264" in value || "x264" in value -> "H.264"
+            else -> null
+        }
+    }
+
+    private fun inferHdr(text: String): String? {
+        val value = text.lowercase()
+        return when {
+            "dolby vision" in value || " dovi" in value || " dv " in value ->
+                "Dolby Vision"
+            "hdr10+" in value -> "HDR10+"
+            "hdr" in value -> "HDR"
+            else -> null
+        }
+    }
+}

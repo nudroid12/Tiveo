@@ -1,0 +1,2193 @@
+package com.vueo.shared.core.plugin
+
+import android.annotation.SuppressLint
+import android.graphics.Bitmap
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.view.MotionEvent
+import android.webkit.ConsoleMessage
+import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.webkit.RenderProcessGoneDetail
+import androidx.webkit.ScriptHandler
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
+import android.content.Context
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.ByteArrayInputStream
+import java.net.HttpURLConnection
+import java.net.URI
+import java.net.URL
+import java.util.Collections
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+
+
+private fun JSONArray?.toVueoStringList(): List<String> {
+    if (this == null) return emptyList()
+    return (0 until length())
+        .mapNotNull { index ->
+            optString(index).trim().takeIf { it.isNotBlank() }
+        }
+}
+
+private fun JSONArray?.toVueoLongList(): List<Long> {
+    if (this == null) return emptyList()
+    return (0 until length())
+        .mapNotNull { index ->
+            when (val value = opt(index)) {
+                is Number -> value.toLong()
+                is String -> value.toLongOrNull()
+                else -> null
+            }
+        }
+}
+
+
+/**
+ * Native WebView fallback for JavaScript providers whose upstream players only
+ * reveal media URLs after JavaScript execution or user interaction.
+ *
+ * The page receives a capture-only JavaScript interface. It cannot call app
+ * actions, read app data or invoke arbitrary native code.
+ */
+internal class PluginWebViewResolver(
+    context: Context,
+) {
+    private val appContext = context.applicationContext
+    private val webViewConcurrency = Semaphore(1)
+
+    suspend fun resolveJson(requestJson: String): String =
+        webViewConcurrency.withPermit {
+            withContext(Dispatchers.Main.immediate) {
+            val request = runCatching {
+                ResolveRequest.parse(requestJson)
+            }.getOrElse { error ->
+                return@withContext errorJson(
+                    error.message ?: "Invalid WebView resolver request."
+                )
+            }
+
+            val subtitles = Collections.synchronizedMap(linkedMapOf<String, CapturedSubtitle>())
+            val session = MediaSessionState()
+            val streams = resolve(request, subtitles, session)
+            JSONObject().apply {
+                if (request.sessionDiagnostics) {
+                    put("frameInteraction", JSONObject().apply {
+                        put("version", 2)
+                        put("hookSupported", session.frameHookSupported)
+                        synchronized(session.frameEvents) {
+                            put("createdFrames", session.frameEvents.values.count { "created" in it })
+                            put("documents", JSONObject().apply {
+                                session.frameStages.values.toSet().forEach { stage ->
+                                    val rows = session.frameEvents.filterKeys { session.frameStages[it] == stage }.values
+                                    put(stage, JSONObject().apply {
+                                        put("created", rows.count { "created" in it })
+                                        put("ready", rows.count { "ready" in it })
+                                        put("loaded", rows.count { "loaded" in it })
+                                        put("unloaded", rows.count { "unloaded" in it })
+                                        put("scriptLoads", rows.sumOf { events -> events.count { it.startsWith("script-loaded-") } })
+                                        put("scriptErrors", rows.sumOf { events -> events.count { it.startsWith("script-error-") } })
+                                        put("runtimeErrors", rows.sumOf { events -> events.count { it.startsWith("runtime-error-") } })
+                                    })
+                                }
+                            })
+                            put("progress", JSONArray(request.frameProgressEvents.indices.map { index -> session.frameEvents.values.count { "progress-$index" in it } }))
+                            put("readyFrames", session.frameEvents.values.count { "ready" in it })
+                            put("playClicks", session.frameEvents.values.sumOf { events -> events.count { it.startsWith("play-click-") } })
+                            put("playerFrames", session.frameEvents.values.count { "player-frame" in it })
+                        }
+                        synchronized(session.stageRequests) { put("requests", JSONObject(session.stageRequests.toMap())) }
+                        synchronized(session.stageErrors) { put("errors", JSONObject(session.stageErrors.toMap())) }
+                        synchronized(session.consoleSignals) { put("consoleSignals", JSONObject(session.consoleSignals.toMap())) }
+                    })
+                    put("sessionHandoffVersion", 1)
+                    put("networkHandoffVersion", 1)
+                    put("sessionResponseVersion", 1)
+                    put("jsonSourceCompletionVersion", 1)
+                    put("jsonSourceEligible", session.jsonSourceEligible)
+                    put("documentStartHook", session.documentStartHook)
+                    put("responses", JSONArray().apply {
+                        synchronized(session.responses) { session.responses.values.forEach { put(it) } }
+                    })
+                    put("blobHandoffVersion", 1)
+                    put("readinessBasis", session.readinessBasis)
+                    put("mediaReady", session.readyUrl.isNotBlank())
+                    put("finishReason", session.finishReason)
+                    put("capturedCount", streams.size)
+                    put("sessionDiagnosticsVersion", 1)
+                    put("diagnostics", JSONObject().apply {
+                        put("hookSeen", session.hookSeen)
+                        put("pageFinished", session.pageFinished)
+                        put("pageHttpStatus", session.pageHttpStatus)
+                        put("mediaHttpStatus", session.mediaHttpStatus)
+                        put("pageNetworkError", session.pageNetworkError)
+                        put("mediaNetworkError", session.mediaNetworkError)
+                        put("mseObserved", session.mseObserved)
+                        put("blobObserved", session.blobObserved)
+                        put("video", session.videoState)
+                    })
+                }
+                if (request.captureSubtitles) {
+                    put("subtitles", JSONArray().apply {
+                        synchronized(subtitles) {
+                            subtitles.values.take(32).forEach { subtitle ->
+                                val headers = subtitle.headers.toMutableMap()
+                                runCatching { CookieManager.getInstance().getCookie(subtitle.url) }
+                                    .getOrNull()?.takeIf { it.isNotBlank() }?.let { headers["Cookie"] = it }
+                                put(JSONObject().apply {
+                                    put("url", subtitle.url)
+                                    put("label", subtitle.label)
+                                    put("language", subtitle.language)
+                                    put("headers", JSONObject(headers))
+                                })
+                            }
+                        }
+                    })
+                }
+                put(
+                    "streams",
+                    JSONArray().apply {
+                        streams.forEach { stream ->
+                            put(
+                                JSONObject().apply {
+                                    put("label", stream.label)
+                                    put("url", stream.url)
+                                    put("headers", JSONObject(stream.headers))
+                                    if (request.sessionDiagnostics) {
+                                        put("mediaReady", session.readyUrl == stream.url)
+                                        put("networkObserved", stream.networkObserved)
+                                        put("responseObserved", stream.responseObserved)
+                                    }
+                                }
+                            )
+                        }
+                    },
+                )
+            }.toString()
+            }
+        }
+
+    @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
+    private suspend fun resolve(
+        request: ResolveRequest,
+        subtitles: MutableMap<String, CapturedSubtitle>,
+        session: MediaSessionState,
+    ): List<CapturedStream> =
+        suspendCancellableCoroutine { continuation ->
+            val handler = Handler(Looper.getMainLooper())
+            val webView = WebView(appContext)
+            val streams = Collections.synchronizedMap(
+                linkedMapOf<String, CapturedStream>()
+            )
+            var finishScheduled = false
+            var destroyed = false
+            var documentStartScript: ScriptHandler? = null
+            var frameStartScript: ScriptHandler? = null
+
+            fun finalizedPlaybackHeaders(
+                stream: CapturedStream,
+            ): Map<String, String> {
+                val headers = stream.headers
+                    .filterKeys { key ->
+                        (key.lowercase() !in BLOCKED_PLAYBACK_HEADERS ||
+                            (request.waitForMediaReady && key.equals("Origin", ignoreCase = true)))
+                    }
+                    .toMutableMap()
+
+                val refreshedCookie = runCatching {
+                    CookieManager.getInstance().getCookie(stream.url)
+                }.getOrNull().orEmpty()
+
+                if (refreshedCookie.isNotBlank()) {
+                    headers["Cookie"] = refreshedCookie
+                }
+
+                headers["User-Agent"] =
+                    headers["User-Agent"] ?: request.userAgent
+                headers["Accept"] =
+                    headers["Accept"] ?: "*/*"
+                headers["Referer"] =
+                    headers["Referer"]
+                        ?: request.referer.ifBlank { request.url }
+
+                return headers
+            }
+
+            fun transportScore(url: String): Int {
+                val value = url.lowercase()
+                return when {
+                    value.contains(".mpd") -> 40
+                    value.contains(".m3u8") -> 30
+                    value.contains(".mp4") -> 20
+                    value.contains(".m4v") -> 20
+                    value.contains("/sora/") -> 10
+                    else -> 0
+                }
+            }
+
+            fun sortedResult(): List<CapturedStream> =
+                synchronized(streams) {
+                    streams.values
+                        .distinctBy { it.url }
+                        .map { stream ->
+                            stream.copy(
+                                headers = finalizedPlaybackHeaders(stream),
+                            )
+                        }
+                        .sortedWith(
+                            compareByDescending<CapturedStream> {
+                                transportScore(it.url)
+                            }.thenByDescending {
+                                qualityScore(it.label, it.url)
+                            }.thenBy { it.label }
+                        )
+                }
+
+            fun safeDestroy() {
+                if (destroyed) return
+                destroyed = true
+                runCatching {
+                    handler.removeCallbacksAndMessages(null)
+                    runCatching { documentStartScript?.remove() }
+                    documentStartScript = null
+                    runCatching { frameStartScript?.remove() }
+                    frameStartScript = null
+                    webView.stopLoading()
+                    webView.removeJavascriptInterface(BRIDGE_NAME)
+                    webView.removeAllViews()
+                }
+                // Always attempt destruction, including when a renderer is dead.
+                runCatching { webView.destroy() }
+            }
+
+            fun finish(reason: String = "timeout") {
+                handler.post {
+                    session.finishReason = reason
+                    if (continuation.isActive) {
+                        val result = sortedResult()
+                        safeDestroy()
+                        continuation.resume(result)
+                    } else {
+                        safeDestroy()
+                    }
+                }
+            }
+
+            fun scheduleFinishSoon() {
+                val jsonSource = request.waitForMediaReady && request.captureSessionResponses && session.jsonSourceEligible
+                val observedMatch = request.waitForMediaReady && synchronized(streams) {
+                    streams.values.any { it.networkObserved && WebViewSessionPolicy.matchesMediaRequest(
+                        it.url, request.mediaRequestMatchers, request.mediaHosts,
+                    ) }
+                }
+                val sessionMedia = request.waitForMediaReady && request.captureSessionResponses &&
+                    synchronized(session.responses) { session.responses.isNotEmpty() } &&
+                    synchronized(streams) { streams.values.any {
+                        (it.networkObserved || it.responseObserved) && request.isStreamUrl(it.url)
+                    } }
+                if (request.waitForMediaReady && request.captureSessionResponses &&
+                    synchronized(session.responses) { session.responses.isEmpty() }) return
+                if (request.waitForMediaReady && !jsonSource && session.readyUrl.isBlank() && !observedMatch && !sessionMedia) return
+                if (finishScheduled) return
+                finishScheduled = true
+                handler.postDelayed(
+                    { finish(when {
+                        jsonSource -> "json-source"
+                        !request.waitForMediaReady -> "first-candidate"
+                        session.readyUrl.isNotBlank() -> "media-ready"
+                        sessionMedia -> "response-media"
+                        else -> "network-candidate"
+                    }) },
+                    request.finishAfterFirstMs,
+                )
+            }
+
+            // Blob readiness is a conservative session correlation, not byte provenance.
+            // Only a single eligible request actually observed by native interception qualifies.
+            fun reconcileBlobReadiness() {
+                if (!request.waitForMediaReady || !request.allowBlobMediaReady || !session.blobReady) return
+                synchronized(streams) {
+                    if (session.readinessBasis == "direct-http") return
+                    val candidate = WebViewSessionPolicy.singleBlobCandidate(
+                        streams.values.filter { it.networkObserved }.map { it.url }, request.mediaHosts,
+                    )
+                    session.readyUrl = candidate.orEmpty()
+                    session.readinessBasis = if (candidate != null) "blob-single-network" else "none"
+                }
+                scheduleFinishSoon()
+            }
+
+            fun addStream(
+                label: String,
+                rawUrl: String?,
+                headers: Map<String, String>,
+                forcePlayable: Boolean = false,
+                networkObserved: Boolean = false,
+                responseObserved: Boolean = false,
+            ) {
+                val fixedUrl = rawUrl
+                    ?.trim()
+                    ?.toAbsoluteUrl(request.url)
+                    ?.takeIf { forcePlayable || request.isStreamUrl(it) }
+                    ?: return
+
+                val fixedHeaders = if (request.waitForMediaReady) {
+                    WebViewSessionPolicy.withDefaults(headers, request.defaultHeaders())
+                } else headers.toMutableMap().apply {
+                    putIfAbsent("User-Agent", request.userAgent)
+                    putIfAbsent("Accept", "*/*")
+                    putIfAbsent("Referer", request.referer.ifBlank { request.url })
+                }
+
+                var added = false
+                synchronized(streams) {
+                    val previous = streams[fixedUrl]
+                    if (previous == null) {
+                        streams[fixedUrl] = CapturedStream(
+                            label = label.trim().ifBlank { guessLabel(fixedUrl) },
+                            url = fixedUrl,
+                            headers = fixedHeaders,
+                            networkObserved = networkObserved,
+                            responseObserved = responseObserved,
+                        )
+                        added = true
+                    } else if (request.waitForMediaReady) {
+                        streams[fixedUrl] = previous.copy(
+                            headers = WebViewSessionPolicy.mergeHeaders(
+                                previous.headers, fixedHeaders,
+                                preferIncoming = networkObserved,
+                            ),
+                            networkObserved = previous.networkObserved || networkObserved,
+                            responseObserved = previous.responseObserved || responseObserved,
+                        )
+                    }
+                }
+
+                reconcileBlobReadiness()
+                if (added || networkObserved || responseObserved) scheduleFinishSoon()
+            }
+
+            fun addSubtitle(rawUrl: String, label: String, language: String, inputHeaders: Map<String, String>) {
+                if (!request.captureSubtitles || destroyed || rawUrl.isBlank()) return
+                val url = rawUrl.trim().toAbsoluteUrl(request.url)
+                if (!(url.startsWith("https://") || url.startsWith("http://"))) return
+                if (request.blockedParts.any { url.lowercase().contains(it) }) return
+                val headers = inputHeaders.filterKeys { it.lowercase() !in BLOCKED_PLAYBACK_HEADERS }.toMutableMap()
+                headers.putIfAbsent("User-Agent", request.userAgent)
+                headers.putIfAbsent("Referer", request.url)
+                synchronized(subtitles) {
+                    val previous = subtitles[url]
+                    if (previous == null && subtitles.size >= 32) return
+                    subtitles[url] = CapturedSubtitle(
+                        url = url,
+                        label = label.take(120).ifBlank { previous?.label.orEmpty() },
+                        language = language.take(40).ifBlank { previous?.language.orEmpty() },
+                        headers = previous?.headers.orEmpty() + headers,
+                    )
+                }
+            }
+
+            fun handleBridgeCapture(value: String) {
+                val clean = value.trim()
+                if (clean.isBlank()) return
+
+                when {
+                    clean.startsWith("VUEO_FRAME_PLAY|") && request.framePlaySelectors.isNotEmpty() && clean.length <= 256 -> {
+                        runCatching {
+                            val event = JSONObject(clean.substringAfter('|'))
+                            val id = event.optString("id").take(64)
+                            val kind = event.optString("event")
+                            if (!Regex("[A-Za-z0-9_-]{1,64}").matches(id) || (kind !in setOf("created", "ready", "loaded", "unloaded", "play-click", "player-frame", "script-error", "runtime-error", "script-loaded") && !Regex("progress-[0-7]").matches(kind))) return@runCatching
+                            synchronized(session.frameEvents) {
+                                if (id !in session.frameEvents && session.frameEvents.size >= 64) return@runCatching
+                                val stage = event.optString("stage").takeIf { it in request.stagePathPrefixes.keys } ?: "frame"
+                                session.frameStages.putIfAbsent(id, stage)
+                                val events = session.frameEvents.getOrPut(id) { linkedSetOf() }
+                                if (kind == "play-click") {
+                                    if (events.count { it.startsWith("play-click-") } < 2) events.add("play-click-${events.size}")
+                                } else if (kind == "script-error" || kind == "runtime-error" || kind == "script-loaded") {
+                                    val count = events.count { it.startsWith("$kind-") }
+                                    if (count < (if (kind == "script-loaded") 32 else 8)) events.add("$kind-$count")
+                                } else events.add(kind)
+                            }
+                        }
+                    }
+                    clean.startsWith("VUEO_JSON_RESPONSE|") && request.captureSessionResponses && clean.length <= 524288 -> {
+                        runCatching {
+                            val item = JSONObject(clean.substringAfter('|'))
+                            val url = item.optString("url")
+                            if (item.optInt("status") !in 200..299 ||
+                                !WebViewSessionPolicy.matchesJsonPrefix(url, request.jsonResponsePrefixes)) return@runCatching
+                            val body = item.optString("body")
+                            if (body.length > 262144) return@runCatching
+                            val record = JSONObject().apply {
+                                put("url", url)
+                                put("status", item.optInt("status"))
+                                put("body", JSONObject(body))
+                            }
+                            val eligible = request.waitForMediaReady && JsonSourceCompletionPolicy.eligible(
+                                url, record.getJSONObject("body"), request.jsonSourceCompletion, request.mediaHosts,
+                            )
+                            synchronized(session.responses) {
+                                // Keep the accepted response even if earlier empty responses filled the bounded capture list.
+                                if (eligible && !session.responses.containsKey(url) && session.responses.size >= 4) {
+                                    session.responses.keys.firstOrNull()?.let { session.responses.remove(it) }
+                                }
+                                if (session.responses.size < 4 || session.responses.containsKey(url)) session.responses[url] = record
+                            }
+                            if (eligible) {
+                                session.jsonSourceEligible = true
+                                session.readinessBasis = "json-source"
+                            }
+                            scheduleFinishSoon()
+                        }
+                    }
+                    clean.startsWith("VUEO_HTTP_RESPONSE|") && request.captureSessionResponses && clean.length <= 16384 -> {
+                        runCatching {
+                            val item = JSONObject(clean.substringAfter('|'))
+                            val url = item.optString("url")
+                            val status = item.optInt("status")
+                            if (status !in listOf(200, 206) || !WebViewSessionPolicy.isHttpUrl(url) ||
+                                !request.isPlayableResponse(url, item.optString("mime"), item.optLong("length", -1L))) return@runCatching
+                            val ref = item.optString("referer").takeIf { WebViewSessionPolicy.isHttpUrl(it) }
+                                ?: request.referer.ifBlank { request.url }
+                            val headers = request.defaultHeaders().toMutableMap().apply {
+                                put("Referer", ref)
+                                runCatching { URI(ref) }.getOrNull()?.let { uri ->
+                                    put("Origin", "${uri.scheme}://${uri.rawAuthority}")
+                                }
+                            }
+                            addStream(guessLabel(url), url, headers, forcePlayable = true, responseObserved = true)
+                        }
+                    }
+                    clean.startsWith("VUEO_MEDIA_STATE|") && request.waitForMediaReady && clean.length <= 2048 -> {
+                        runCatching {
+                            val item = JSONObject(clean.substringAfter('|'))
+                            fun enumValue(key: String, allowed: List<String>): String =
+                                item.optString(key).takeIf { it in allowed } ?: "unknown"
+                            session.videoState = JSONObject().apply {
+                                put("count", item.optInt("count", 0).coerceIn(0, 16))
+                                put("readyState", item.optInt("readyState", -1).coerceIn(-1, 4))
+                                put("networkState", item.optInt("networkState", -1).coerceIn(-1, 3))
+                                put("errorCode", item.optInt("errorCode", 0).coerceIn(0, 4))
+                                put("paused", item.optBoolean("paused", true))
+                                put("sourceKind", enumValue("sourceKind", listOf("http", "https", "blob", "none", "other")))
+                                put("pageSignal", enumValue("pageSignal", listOf("none", "sandbox_required", "human_verification", "access_denied", "unavailable")))
+                                put("visibility", enumValue("visibility", listOf("visible", "hidden", "prerender")))
+                            }
+                            session.hookSeen = true
+                        }
+                    }
+                    clean.startsWith("VUEO_MSE|") && request.waitForMediaReady -> session.mseObserved = true
+                    clean.startsWith("VUEO_BLOB|") && request.waitForMediaReady -> session.blobObserved = true
+                    clean == "VUEO_BLOB_READY|true" && request.waitForMediaReady && request.allowBlobMediaReady -> {
+                        session.blobReady = true
+                        reconcileBlobReadiness()
+                    }
+                    clean == "VUEO_BLOB_READY|false" && request.waitForMediaReady && request.allowBlobMediaReady -> {
+                        session.blobReady = false
+                        if (session.readinessBasis == "blob-single-network") {
+                            session.readyUrl = ""
+                            session.readinessBasis = "none"
+                        }
+                    }
+                    clean.startsWith("VUEO_MEDIA_READY|") && request.waitForMediaReady -> {
+                        val file = clean.removePrefix("VUEO_MEDIA_READY|")
+                        if (request.isStreamUrl(file)) {
+                            session.readyUrl = file
+                            session.readinessBasis = "direct-http"
+                            addStream(guessLabel(file), file, request.defaultHeaders())
+                            scheduleFinishSoon()
+                        }
+                    }
+                    clean.startsWith("VUEO_SUBTITLE|") && request.captureSubtitles && clean.length <= 32768 -> {
+                        runCatching {
+                            val item = JSONObject(clean.substringAfter('|'))
+                            val ref = item.optString("referer").takeIf {
+                                it.startsWith("http://") || it.startsWith("https://")
+                            } ?: request.url
+                            addSubtitle(item.optString("url"), item.optString("label"),
+                                item.optString("language"), mapOf("Referer" to ref))
+                        }
+                    }
+                    clean.startsWith("VUEO_SOURCE|") -> {
+                        val parts = clean.split("|", limit = 4)
+                        if (parts.size >= 4) {
+                            addStream(
+                                label = parts[1],
+                                rawUrl = parts[3],
+                                headers = request.defaultHeaders(),
+                            )
+                        }
+                    }
+
+                    clean.startsWith("VUEO_VIDEO|") -> {
+                        val file = clean.removePrefix("VUEO_VIDEO|")
+                        addStream(
+                            label = guessLabel(file),
+                            rawUrl = file,
+                            headers = request.defaultHeaders(),
+                        )
+                    }
+
+                    clean.startsWith("VUEO_FETCH|") ||
+                        clean.startsWith("VUEO_XHR|") -> {
+                        val file = clean.substringAfter('|')
+                        if (request.isStreamUrl(file)) {
+                            addStream(
+                                label = guessLabel(file),
+                                rawUrl = file,
+                                headers = request.defaultHeaders(),
+                            )
+                        }
+                    }
+
+                    clean.startsWith("VUEO_CANDIDATE|") -> {
+                        val parts = clean.split("|", limit = 3)
+                        if (parts.size >= 3) {
+                            val file = parts[2]
+                            addStream(
+                                label = guessLabel(file),
+                                rawUrl = file,
+                                headers = request.defaultHeaders(),
+                            )
+                        }
+                    }
+
+                    clean.startsWith("VUEO_RESPONSE|") -> {
+                        val parts = clean.split("|", limit = 4)
+                        if (parts.size >= 4) {
+                            val mime = parts[1]
+                            val length = parts[2].toLongOrNull() ?: -1L
+                            val file = parts[3]
+                            if (request.isPlayableResponse(file, mime, length)) {
+                                addStream(
+                                    label = guessLabel(file),
+                                    rawUrl = file,
+                                    headers = request.defaultHeaders(),
+                                    forcePlayable = true,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            fun runtimeHookScript(): String = HOOK_JS
+                .replace("__VUEO_CAPTURE_SUBTITLES__", request.captureSubtitles.toString())
+                .replace("__VUEO_WAIT_FOR_MEDIA_READY__", request.waitForMediaReady.toString())
+                .replace("__VUEO_ALLOW_BLOB_MEDIA_READY__", request.allowBlobMediaReady.toString())
+                .replace("__VUEO_CAPTURE_SESSION_RESPONSES__", request.captureSessionResponses.toString())
+                .replace("[\"__VUEO_JSON_RESPONSE_PREFIXES__\"]", JSONArray(request.jsonResponsePrefixes).toString())
+                .replace("__VUEO_JSON_SOURCE_COMPLETION_ENABLED__", (request.jsonSourceCompletion != null).toString())
+                .substringAfter("<script>").substringBeforeLast("</script>")
+
+            fun injectRuntimeHook(view: WebView?) {
+                if (!request.directLoad) return
+                runCatching { view?.evaluateJavascript(runtimeHookScript(), null) }
+            }
+
+            fun clickWebView() {
+                if (request.framePlaySelectors.isNotEmpty()) return // Frame-local selectors own interaction in this opt-in mode.
+                if (streams.isNotEmpty() && (!request.waitForMediaReady || session.readyUrl.isNotBlank())) return
+
+                if (request.directLoad) {
+                    runCatching {
+                        val interactionTextsJson =
+                            JSONArray(request.interactionTexts).toString()
+                        val searchTextJson =
+                            JSONObject.quote(request.searchText)
+
+                        webView.evaluateJavascript(
+                            """
+                            (function() {
+                              try {
+                                var wanted = $interactionTextsJson;
+                                var searchText = $searchTextJson;
+
+                                function norm(value) {
+                                  return String(value || '')
+                                    .toLowerCase()
+                                    .replace(/\s+/g, ' ')
+                                    .trim();
+                                }
+
+                                function visible(el) {
+                                  if (!el) return false;
+                                  var style = window.getComputedStyle(el);
+                                  if (!style) return true;
+                                  if (
+                                    style.display === 'none' ||
+                                    style.visibility === 'hidden' ||
+                                    Number(style.opacity || '1') === 0
+                                  ) return false;
+                                  var rect = el.getBoundingClientRect();
+                                  return rect.width > 0 && rect.height > 0;
+                                }
+
+                                function descriptor(el) {
+                                  return norm(
+                                    (el.innerText || el.textContent || '') + ' ' +
+                                    (el.getAttribute('aria-label') || '') + ' ' +
+                                    (el.getAttribute('title') || '') + ' ' +
+                                    (el.getAttribute('placeholder') || '') + ' ' +
+                                    (el.className || '')
+                                  );
+                                }
+
+                                function clickElement(el) {
+                                  if (!el) return false;
+                                  try {
+                                    el.scrollIntoView({
+                                      block: 'center',
+                                      inline: 'center'
+                                    });
+                                  } catch(e) {}
+
+                                  try {
+                                    el.dispatchEvent(
+                                      new MouseEvent('mousedown', {
+                                        bubbles: true,
+                                        cancelable: true,
+                                        view: window
+                                      })
+                                    );
+                                    el.dispatchEvent(
+                                      new MouseEvent('mouseup', {
+                                        bubbles: true,
+                                        cancelable: true,
+                                        view: window
+                                      })
+                                    );
+                                    el.click();
+                                    return true;
+                                  } catch(e) {
+                                    return false;
+                                  }
+                                }
+
+                                function setInputValue(input, value) {
+                                  if (!input) return false;
+
+                                  try {
+                                    var proto =
+                                      input.tagName &&
+                                      input.tagName.toLowerCase() === 'textarea'
+                                        ? window.HTMLTextAreaElement.prototype
+                                        : window.HTMLInputElement.prototype;
+
+                                    var descriptor =
+                                      Object.getOwnPropertyDescriptor(
+                                        proto,
+                                        'value'
+                                      );
+
+                                    if (descriptor && descriptor.set) {
+                                      descriptor.set.call(input, value);
+                                    } else {
+                                      input.value = value;
+                                    }
+
+                                    input.dispatchEvent(
+                                      new Event('input', {
+                                        bubbles: true
+                                      })
+                                    );
+                                    input.dispatchEvent(
+                                      new Event('change', {
+                                        bubbles: true
+                                      })
+                                    );
+                                    input.dispatchEvent(
+                                      new KeyboardEvent('keydown', {
+                                        key: 'Enter',
+                                        code: 'Enter',
+                                        keyCode: 13,
+                                        which: 13,
+                                        bubbles: true
+                                      })
+                                    );
+                                    input.dispatchEvent(
+                                      new KeyboardEvent('keyup', {
+                                        key: 'Enter',
+                                        code: 'Enter',
+                                        keyCode: 13,
+                                        which: 13,
+                                        bubbles: true
+                                      })
+                                    );
+
+                                    if (input.form) {
+                                      try {
+                                        if (input.form.requestSubmit) {
+                                          input.form.requestSubmit();
+                                        }
+                                      } catch(e) {}
+                                    }
+
+                                    return true;
+                                  } catch(e) {
+                                    return false;
+                                  }
+                                }
+
+                                var searchNorm = norm(searchText);
+
+                                /*
+                                 * Stage 1:
+                                 * If a card/link for the requested title is already
+                                 * visible, click it directly. This also handles search
+                                 * results rendered after a previous interaction tick.
+                                 */
+                                if (searchNorm) {
+                                  var titleLinks =
+                                    document.querySelectorAll(
+                                      'a[href],button,[role="button"]'
+                                    );
+
+                                  for (
+                                    var t = 0;
+                                    t < titleLinks.length;
+                                    t++
+                                  ) {
+                                    var titleEl = titleLinks[t];
+                                    if (!visible(titleEl)) continue;
+
+                                    var titleDesc = descriptor(titleEl);
+                                    if (
+                                      titleDesc &&
+                                      titleDesc.indexOf(searchNorm) !== -1
+                                    ) {
+                                      if (clickElement(titleEl)) {
+                                        return 'title-click';
+                                      }
+                                    }
+                                  }
+                                }
+
+                                /*
+                                 * Stage 2:
+                                 * Open CineMode's search UI if it is collapsed.
+                                 */
+                                if (searchNorm) {
+                                  var searchButtons =
+                                    document.querySelectorAll(
+                                      'button,a,[role="button"]'
+                                    );
+
+                                  for (
+                                    var s = 0;
+                                    s < searchButtons.length;
+                                    s++
+                                  ) {
+                                    var searchButton = searchButtons[s];
+                                    if (!visible(searchButton)) continue;
+
+                                    var searchDesc =
+                                      descriptor(searchButton);
+
+                                    if (
+                                      searchDesc === 'search' ||
+                                      searchDesc.indexOf(' search ') !== -1 ||
+                                      searchDesc.indexOf('search button') !== -1 ||
+                                      searchDesc.indexOf('open search') !== -1
+                                    ) {
+                                      clickElement(searchButton);
+                                      break;
+                                    }
+                                  }
+
+                                  /*
+                                   * Stage 3:
+                                   * Fill any available search input. React controlled
+                                   * inputs need the native value setter plus input and
+                                   * change events.
+                                   */
+                                  var searchInputs =
+                                    document.querySelectorAll(
+                                      'input[type="search"],' +
+                                      'input[placeholder*="search" i],' +
+                                      'input[aria-label*="search" i],' +
+                                      'input[name*="search" i],' +
+                                      'input[name="q"]'
+                                    );
+
+                                  for (
+                                    var q = 0;
+                                    q < searchInputs.length;
+                                    q++
+                                  ) {
+                                    var input = searchInputs[q];
+                                    if (!visible(input)) continue;
+
+                                    var current = norm(input.value);
+                                    if (current !== searchNorm) {
+                                      setInputValue(input, searchText);
+                                      return 'search-fill';
+                                    }
+                                  }
+                                }
+
+                                /*
+                                 * Stage 4:
+                                 * Once on the detail/player page, interact with Watch,
+                                 * Play, Continue, Skip and Close controls.
+                                 */
+                                var nodes = Array.prototype.slice.call(
+                                  document.querySelectorAll(
+                                    'button,a,[role="button"],' +
+                                    '[class*="play" i],[class*="watch" i],' +
+                                    '[class*="skip" i],[class*="close" i]'
+                                  )
+                                );
+
+                                var best = null;
+                                var bestScore = 9999;
+
+                                for (
+                                  var n = 0;
+                                  n < nodes.length;
+                                  n++
+                                ) {
+                                  var el = nodes[n];
+                                  if (!visible(el)) continue;
+
+                                  var desc = descriptor(el);
+                                  if (!desc) continue;
+
+                                  for (
+                                    var i = 0;
+                                    i < wanted.length;
+                                    i++
+                                  ) {
+                                    var needle = norm(wanted[i]);
+                                    if (!needle) continue;
+
+                                    if (
+                                      desc === needle ||
+                                      desc.indexOf(needle) !== -1
+                                    ) {
+                                      if (i < bestScore) {
+                                        best = el;
+                                        bestScore = i;
+                                      }
+                                      break;
+                                    }
+                                  }
+                                }
+
+                                if (best) {
+                                  clickElement(best);
+                                }
+
+                                var videos =
+                                  document.querySelectorAll('video');
+
+                                for (
+                                  var v = 0;
+                                  v < videos.length;
+                                  v++
+                                ) {
+                                  try {
+                                    videos[v].muted = true;
+                                    videos[v].playsInline = true;
+
+                                    var p = videos[v].play();
+                                    if (p && p.catch) {
+                                      p.catch(function(){});
+                                    }
+                                  } catch(e) {}
+                                }
+
+                                var common = [
+                                  '.vjs-big-play-button',
+                                  '.jw-icon-display',
+                                  'button[aria-label*="play" i]',
+                                  '[data-testid*="play" i]'
+                                ];
+
+                                for (
+                                  var c = 0;
+                                  c < common.length;
+                                  c++
+                                ) {
+                                  var control =
+                                    document.querySelector(common[c]);
+
+                                  if (
+                                    !control ||
+                                    !visible(control)
+                                  ) continue;
+
+                                  clickElement(control);
+                                  break;
+                                }
+
+                                return 'interaction';
+                              } catch(e) {
+                                return 'interaction-error';
+                              }
+                            })();
+                            """.trimIndent(),
+                            null,
+                        )
+                    }
+                }
+
+                runCatching {
+                    val now = SystemClock.uptimeMillis()
+                    val x = request.clickX
+                    val y = request.clickY
+
+                    webView.dispatchTouchEvent(
+                        MotionEvent.obtain(
+                            now,
+                            now,
+                            MotionEvent.ACTION_DOWN,
+                            x,
+                            y,
+                            0,
+                        )
+                    )
+                    webView.dispatchTouchEvent(
+                        MotionEvent.obtain(
+                            now,
+                            now + 80L,
+                            MotionEvent.ACTION_UP,
+                            x,
+                            y,
+                            0,
+                        )
+                    )
+                }
+            }
+
+            fun stagesForUrl(raw: String): Set<String> = runCatching {
+                val uri = URI(raw)
+                val path = uri.path.orEmpty()
+                val keys = uri.rawQuery.orEmpty().split('&').map { it.substringBefore('=') }.toSet()
+                request.stagePathPrefixes.filterValues { path.startsWith(it) }.keys +
+                    request.stageQueryKeys.filterValues { it in keys }.keys
+            }.getOrDefault(emptySet())
+
+            fun captureStream(requestInfo: WebResourceRequest?) {
+                val requestUrl = requestInfo?.url?.toString()?.trim().orEmpty()
+                if (!request.isStreamUrl(requestUrl)) return
+
+                val headers = requestInfo?.requestHeaders
+                    .orEmpty()
+                    .toMutableMap()
+
+                val cookie = runCatching {
+                    CookieManager.getInstance().getCookie(requestUrl)
+                }.getOrNull().orEmpty()
+
+                if (cookie.isNotBlank()) headers["Cookie"] = cookie
+
+                addStream(
+                    label = guessLabel(requestUrl),
+                    rawUrl = requestUrl,
+                    headers = headers,
+                    networkObserved = true,
+                )
+            }
+
+            continuation.invokeOnCancellation {
+                handler.post { safeDestroy() }
+            }
+
+            runCatching {
+                WebView.setWebContentsDebuggingEnabled(false)
+
+                val cookieManager = CookieManager.getInstance()
+                cookieManager.setAcceptCookie(true)
+                cookieManager.setAcceptThirdPartyCookies(webView, true)
+
+                webView.addJavascriptInterface(
+                    CaptureBridge(::handleBridgeCapture),
+                    BRIDGE_NAME,
+                )
+                webView.layout(0, 0, request.viewportWidth, request.viewportHeight)
+
+                webView.settings.apply {
+                    javaScriptEnabled = true
+                    domStorageEnabled = true
+                    mediaPlaybackRequiresUserGesture = false
+                    loadsImagesAutomatically = true
+                    javaScriptCanOpenWindowsAutomatically = !request.suppressPopups
+                    setSupportMultipleWindows(false)
+                    mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                    userAgentString = request.userAgent
+                }
+
+                val targetHost = runCatching {
+                    URI(request.url).host.orEmpty().lowercase()
+                }.getOrDefault("")
+
+                webView.webChromeClient = object : WebChromeClient() {
+                    override fun onConsoleMessage(message: ConsoleMessage?): Boolean {
+                        if (request.framePlaySelectors.isNotEmpty()) {
+                            val text = message?.message().orEmpty().lowercase()
+                            request.frameConsoleMatchers.forEach { (label, needle) ->
+                                if (text.take(4096).contains(needle.lowercase())) synchronized(session.consoleSignals) {
+                                    session.consoleSignals[label] = ((session.consoleSignals[label] ?: 0) + 1).coerceAtMost(10000)
+                                }
+                            }
+                        }
+                        return super.onConsoleMessage(message)
+                    }
+                }
+                webView.webViewClient = object : WebViewClient() {
+                    override fun onRenderProcessGone(
+                        view: WebView?,
+                        detail: RenderProcessGoneDetail?,
+                    ): Boolean {
+                        // Report renderer failure as a provider error, not an app crash.
+                        if (destroyed) return true
+                        streams.clear()
+                        safeDestroy()
+                        if (continuation.isActive) {
+                            continuation.resumeWithException(
+                                java.io.IOException("Provider WebView renderer stopped."),
+                            )
+                        }
+                        return true
+                    }
+
+                    override fun onPageStarted(
+                        view: WebView?,
+                        url: String?,
+                        favicon: Bitmap?,
+                    ) {
+                        injectRuntimeHook(view)
+                    }
+
+                    override fun onPageCommitVisible(
+                        view: WebView?,
+                        url: String?,
+                    ) {
+                        injectRuntimeHook(view)
+                    }
+
+                    override fun onPageFinished(
+                        view: WebView?,
+                        url: String?,
+                    ) {
+                        if (request.sessionDiagnostics) session.pageFinished = true
+                        injectRuntimeHook(view)
+                    }
+
+                    override fun onReceivedHttpError(
+                        view: WebView?, webRequest: WebResourceRequest?, errorResponse: WebResourceResponse?,
+                    ) {
+                        if (request.sessionDiagnostics) {
+                            val status = errorResponse?.statusCode?.coerceIn(100, 599) ?: 0
+                            stagesForUrl(webRequest?.url?.toString().orEmpty()).forEach { stage ->
+                                synchronized(session.stageErrors) { session.stageErrors[stage] = status }
+                            }
+                            if (webRequest?.isForMainFrame == true) session.pageHttpStatus = status
+                            if (request.isStreamUrl(webRequest?.url?.toString())) session.mediaHttpStatus = status
+                        }
+                        super.onReceivedHttpError(view, webRequest, errorResponse)
+                    }
+
+                    override fun onReceivedError(
+                        view: WebView?, webRequest: WebResourceRequest?, error: WebResourceError?,
+                    ) {
+                        if (request.sessionDiagnostics) {
+                            val code = error?.errorCode?.coerceIn(-100, 0) ?: 0
+                            if (webRequest?.isForMainFrame == true) session.pageNetworkError = code
+                            if (request.isStreamUrl(webRequest?.url?.toString())) session.mediaNetworkError = code
+                        }
+                        super.onReceivedError(view, webRequest, error)
+                    }
+
+                    override fun shouldInterceptRequest(
+                        view: WebView?,
+                        webRequest: WebResourceRequest?,
+                    ): WebResourceResponse? {
+                        val requestUrl = webRequest?.url?.toString().orEmpty()
+                        if (request.framePlaySelectors.isNotEmpty()) {
+                            stagesForUrl(requestUrl).forEach { stage ->
+                                synchronized(session.stageRequests) {
+                                    session.stageRequests[stage] = ((session.stageRequests[stage] ?: 0) + 1).coerceAtMost(10000)
+                                }
+                            }
+                        }
+
+                        if (
+                            request.injectAbyssHook &&
+                            shouldInjectAbyssPage(requestUrl)
+                        ) {
+                            return runCatching {
+                                injectIntoAbyssPage(
+                                    pageUrl = requestUrl,
+                                    referer = request.referer.ifBlank { request.url },
+                                    userAgent = request.userAgent,
+                                )
+                            }.getOrNull()
+                        }
+
+                        if (request.captureSubtitles && Regex("\\.(vtt|srt)(?:$|[?#])", RegexOption.IGNORE_CASE).containsMatchIn(requestUrl)) {
+                            addSubtitle(requestUrl, "", "", webRequest?.requestHeaders.orEmpty())
+                        }
+                        if (request.isStreamUrl(requestUrl)) {
+                            captureStream(webRequest)
+
+                            /*
+                             * Capture must be passive by default. Older builds
+                             * returned an empty response here, which stopped
+                             * JS/MSE players after their first source/API hit
+                             * and prevented the downstream manifest request from
+                             * ever being revealed.
+                             */
+                            if (request.blockMatchedRequests) {
+                                return WebResourceResponse(
+                                    "video/mp4",
+                                    "UTF-8",
+                                    ByteArrayInputStream(ByteArray(0)),
+                                )
+                            }
+                        }
+
+                        return super.shouldInterceptRequest(view, webRequest)
+                    }
+
+                    @Deprecated("Deprecated in Android")
+                    override fun shouldOverrideUrlLoading(
+                        view: WebView?,
+                        url: String?,
+                    ): Boolean {
+                        if (!request.lockMainFrameHost) return false
+                        val host = runCatching {
+                            URI(url.orEmpty()).host.orEmpty().lowercase()
+                        }.getOrDefault("")
+                        return targetHost.isNotBlank() &&
+                            host.isNotBlank() &&
+                            host != targetHost
+                    }
+
+                    override fun shouldOverrideUrlLoading(
+                        view: WebView?,
+                        webRequest: WebResourceRequest?,
+                    ): Boolean {
+                        if (!request.lockMainFrameHost) return false
+                        if (webRequest?.isForMainFrame != true) return false
+
+                        val host = runCatching {
+                            webRequest.url?.host.orEmpty().lowercase()
+                        }.getOrDefault("")
+
+                        return targetHost.isNotBlank() &&
+                            host.isNotBlank() &&
+                            host != targetHost
+                    }
+                }
+
+                val wrapper = """
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        <style>
+                            html, body, iframe {
+                                margin: 0;
+                                padding: 0;
+                                width: 100%;
+                                height: 100%;
+                                background: #000;
+                                border: 0;
+                                overflow: hidden;
+                            }
+                        </style>
+                    </head>
+                    <body>
+                        <iframe
+                            id="vueo_player_frame"
+                            src="${htmlEscape(request.url)}"
+                            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                            allowfullscreen>
+                        </iframe>
+                    </body>
+                    </html>
+                """.trimIndent()
+
+                if (request.directLoad) {
+                    if (request.framePlaySelectors.isNotEmpty()) {
+                        runCatching {
+                            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                                val script = appContext.assets.open("provider_frame_interaction.js").bufferedReader().use { it.readText() }
+                                    .replace("__VUEO_FRAME_PLAY_SELECTORS__", JSONArray(request.framePlaySelectors).toString())
+                                    .replace("__VUEO_PLAYER_FRAME_SELECTORS__", JSONArray(request.playerFrameSelectors).toString())
+                                    .replace("__VUEO_FRAME_STAGE_PATHS__", JSONObject(request.stagePathPrefixes).toString())
+                                    .replace("__VUEO_FRAME_PROGRESS_EVENTS__", JSONArray(request.frameProgressEvents).toString())
+                                frameStartScript = WebViewCompat.addDocumentStartJavaScript(webView, script, setOf("*"))
+                                session.frameHookSupported = true
+                            }
+                        }
+                    }
+                    if (request.waitForMediaReady && request.captureSessionResponses) {
+                        runCatching {
+                            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                                val entry = URI(request.url)
+                                documentStartScript = WebViewCompat.addDocumentStartJavaScript(
+                                    webView, runtimeHookScript(), setOf("${entry.scheme}://${entry.rawAuthority}"),
+                                )
+                                session.documentStartHook = true
+                            }
+                        }
+                    }
+                    val initialHeaders = mutableMapOf<String, String>()
+                    if (request.referer.isNotBlank()) {
+                        initialHeaders["Referer"] = request.referer
+                    }
+                    webView.loadUrl(request.url, initialHeaders)
+                } else {
+                    webView.loadDataWithBaseURL(
+                        request.referer.ifBlank { request.url },
+                        wrapper,
+                        "text/html",
+                        "UTF-8",
+                        null,
+                    )
+                }
+
+                request.clickDelaysMs.forEach { clickDelay ->
+                    if (clickDelay < request.timeoutMs) {
+                        handler.postDelayed({ clickWebView() }, clickDelay)
+                    }
+                }
+
+                handler.postDelayed({ finish() }, request.timeoutMs)
+            }.onFailure {
+                finish("load-error")
+            }
+        }
+
+    private class CaptureBridge(
+        private val onCapture: (String) -> Unit,
+    ) {
+        @JavascriptInterface
+        fun capture(value: String?) {
+            onCapture(value.orEmpty())
+        }
+    }
+
+    private data class CapturedSubtitle(
+        val url: String,
+        val label: String,
+        val language: String,
+        val headers: Map<String, String>,
+    )
+
+    private class MediaSessionState {
+        @Volatile var jsonSourceEligible: Boolean = false
+        @Volatile var documentStartHook: Boolean = false
+        @Volatile var readyUrl: String = ""
+        @Volatile var readinessBasis: String = "none"
+        @Volatile var blobReady: Boolean = false
+        @Volatile var finishReason: String = "timeout"
+        @Volatile var hookSeen: Boolean = false
+        @Volatile var pageFinished: Boolean = false
+        @Volatile var pageHttpStatus: Int = 0
+        @Volatile var mediaHttpStatus: Int = 0
+        @Volatile var pageNetworkError: Int = 0
+        @Volatile var mediaNetworkError: Int = 0
+        @Volatile var mseObserved: Boolean = false
+        @Volatile var blobObserved: Boolean = false
+        @Volatile var videoState: JSONObject = JSONObject()
+        @Volatile var frameHookSupported: Boolean = false
+        val frameStages = linkedMapOf<String, String>() // Guarded by frameEvents.
+        val consoleSignals = Collections.synchronizedMap(linkedMapOf<String, Int>())
+        val frameEvents = Collections.synchronizedMap(linkedMapOf<String, MutableSet<String>>())
+        val stageRequests = Collections.synchronizedMap(linkedMapOf<String, Int>())
+        val stageErrors = Collections.synchronizedMap(linkedMapOf<String, Int>())
+        val responses = Collections.synchronizedMap(linkedMapOf<String, JSONObject>())
+    }
+
+    private data class CapturedStream(
+        val label: String,
+        val url: String,
+        val headers: Map<String, String>,
+        val networkObserved: Boolean = false,
+        val responseObserved: Boolean = false,
+    )
+
+    private data class ResolveRequest(
+        val url: String,
+        val referer: String,
+        val timeoutMs: Long,
+        val finishAfterFirstMs: Long,
+        val clickDelaysMs: List<Long>,
+        val matchParts: List<String>,
+        val blockedParts: List<String>,
+        val userAgent: String,
+        val injectAbyssHook: Boolean,
+        val directLoad: Boolean,
+        val interactionTexts: List<String>,
+        val searchText: String,
+        val suppressPopups: Boolean,
+        val lockMainFrameHost: Boolean,
+        val viewportWidth: Int,
+        val viewportHeight: Int,
+        val clickX: Float,
+        val clickY: Float,
+        val blockMatchedRequests: Boolean,
+        val captureSubtitles: Boolean,
+        val waitForMediaReady: Boolean,
+        val allowBlobMediaReady: Boolean,
+        val mediaHosts: List<String>,
+        val mediaRequestMatchers: List<String>,
+        val captureSessionResponses: Boolean,
+        val jsonResponsePrefixes: List<String>,
+        val jsonSourceCompletion: JSONObject?,
+        val framePlaySelectors: List<String>,
+        val playerFrameSelectors: List<String>,
+        val stagePathPrefixes: Map<String, String>,
+        val stageQueryKeys: Map<String, String>,
+        val frameProgressEvents: List<String>,
+        val frameConsoleMatchers: Map<String, String>,
+    ) {
+        val sessionDiagnostics: Boolean get() = waitForMediaReady || framePlaySelectors.isNotEmpty()
+
+        fun isStreamUrl(rawUrl: String?): Boolean {
+            val value = rawUrl?.lowercase().orEmpty()
+            if (value.isBlank()) return false
+            if (blockedParts.any(value::contains)) return false
+            if (waitForMediaReady) return WebViewSessionPolicy.isMediaUrl(rawUrl.orEmpty(), mediaHosts)
+
+            // Known final transports always stay eligible, even when a
+            // provider supplies extra match probes for an API/player endpoint.
+            if (DEFAULT_MATCH_PARTS.any(value::contains)) return true
+
+            // Source-discovery endpoints are probes, not playable streams.
+            // Treating them as final used to schedule an early WebView finish.
+            if (DEFAULT_DISCOVERY_PARTS.any(value::contains)) return false
+
+            return matchParts.any(value::contains)
+        }
+
+        fun isPlayableResponse(
+            rawUrl: String?,
+            contentType: String?,
+            contentLength: Long,
+        ): Boolean {
+            val value = rawUrl?.lowercase().orEmpty()
+            if (value.isBlank()) return false
+            if (blockedParts.any(value::contains)) return false
+            if (looksLikeMediaSegment(value)) return false
+            if (isStreamUrl(value)) return true
+
+            val mime = contentType?.lowercase().orEmpty()
+            return when {
+                mime.contains("application/vnd.apple.mpegurl") -> true
+                mime.contains("application/x-mpegurl") -> true
+                mime.contains("application/dash+xml") -> true
+                mime.startsWith("video/mp4") -> contentLength >= MIN_DIRECT_VIDEO_BYTES
+                mime.startsWith("video/webm") -> contentLength >= MIN_DIRECT_VIDEO_BYTES
+                mime.startsWith("video/x-m4v") -> contentLength >= MIN_DIRECT_VIDEO_BYTES
+                else -> false
+            }
+        }
+
+        private fun looksLikeMediaSegment(value: String): Boolean =
+            SEGMENT_PARTS.any(value::contains)
+
+        fun defaultHeaders(): Map<String, String> =
+            mapOf(
+                "User-Agent" to userAgent,
+                "Accept" to "*/*",
+                "Referer" to referer.ifBlank { url },
+            )
+
+        companion object {
+            fun parse(raw: String): ResolveRequest {
+                val json = JSONObject(raw)
+                val url = json.optString("url").trim()
+                require(url.startsWith("https://") || url.startsWith("http://")) {
+                    "WebView resolver requires an HTTP(S) URL."
+                }
+
+                val timeoutMs = json.optLong("timeoutMs", DEFAULT_WEBVIEW_TIMEOUT_MS)
+                    .coerceIn(MIN_WEBVIEW_TIMEOUT_MS, MAX_WEBVIEW_TIMEOUT_MS)
+
+                val matchParts = (
+                    DEFAULT_MATCH_PARTS +
+                        json.optJSONArray("match")
+                            .toVueoStringList()
+                            .map { it.lowercase() }
+                ).distinct()
+
+                val blockedParts = json.optJSONArray("blocked")
+                    .toVueoStringList()
+                    .map { it.lowercase() }
+                    .ifEmpty { DEFAULT_BLOCKED_PARTS }
+
+                val clickDelays = json.optJSONArray("clickDelaysMs")
+                    .toVueoLongList()
+                    .filter { it >= 0L }
+                    .distinct()
+                    .sorted()
+                    .ifEmpty { DEFAULT_CLICK_DELAYS_MS }
+
+                val viewportWidth = json.optInt("viewportWidth", 1080)
+                    .coerceIn(320, 3840)
+                val viewportHeight = json.optInt("viewportHeight", 1080)
+                    .coerceIn(320, 2160)
+
+                return ResolveRequest(
+                    url = url,
+                    framePlaySelectors = json.optJSONArray("framePlaySelectors").toVueoStringList()
+                        .filter { it.length <= 96 && Regex("button[.#][A-Za-z][A-Za-z0-9_-]*").matches(it) }.distinct().take(8),
+                    playerFrameSelectors = json.optJSONArray("playerFrameSelectors").toVueoStringList()
+                        .filter { it.length <= 96 && Regex("iframe[.#][A-Za-z][A-Za-z0-9_-]*").matches(it) }.distinct().take(8),
+                    stagePathPrefixes = json.optJSONObject("stagePathPrefixes")?.let { stages ->
+                        stages.keys().asSequence().take(8).filter { Regex("[a-z0-9_-]{1,24}").matches(it) }
+                            .mapNotNull { key -> stages.optString(key).takeIf { value -> value.startsWith("/") && value.length <= 256 && !value.contains('?') && !value.contains('#') }?.let { key to it } }.toMap()
+                    }.orEmpty(),
+                    stageQueryKeys = json.optJSONObject("stageQueryKeys")?.let { entries ->
+                        entries.keys().asSequence().take(8).filter { Regex("[a-z0-9_-]{1,24}").matches(it) }
+                            .mapNotNull { key -> entries.optString(key).takeIf { Regex("[A-Za-z][A-Za-z0-9_-]{0,63}").matches(it) }?.let { key to it } }.toMap()
+                    }.orEmpty(),
+                    frameProgressEvents = json.optJSONArray("frameProgressEvents").toVueoStringList()
+                        .filter { Regex("[A-Za-z][A-Za-z0-9:_-]{0,63}").matches(it) }.distinct().take(8),
+                    frameConsoleMatchers = json.optJSONObject("frameConsoleMatchers")?.let { entries ->
+                        entries.keys().asSequence().take(8).filter { Regex("[a-z0-9_-]{1,24}").matches(it) }
+                            .mapNotNull { key -> entries.optString(key).takeIf { it.length in 4..128 }?.let { key to it } }.toMap()
+                    }.orEmpty(),
+                    captureSubtitles = json.optBoolean("captureSubtitles", false),
+                    waitForMediaReady = json.optBoolean("waitForMediaReady", false),
+                    allowBlobMediaReady = json.optBoolean("allowBlobMediaReady", false),
+                    captureSessionResponses = json.optBoolean("captureSessionResponses", false),
+                    jsonResponsePrefixes = json.optJSONArray("jsonResponsePrefixes").toVueoStringList()
+                        .filter { it.length <= 1024 }.distinct().take(4),
+                    jsonSourceCompletion = json.optJSONObject("jsonSourceCompletion")?.takeIf { it.toString().length <= 4096 },
+                    mediaRequestMatchers = json.optJSONArray("mediaRequestMatchers").toVueoStringList()
+                        .filter { it.length <= 4096 }.distinct().take(16),
+                    mediaHosts = json.optJSONArray("mediaHosts").toVueoStringList()
+                        .map { it.lowercase() }.filter { Regex("[a-z0-9.-]+").matches(it) }.distinct().take(8),
+                    referer = json.optString("referer").trim(),
+                    timeoutMs = timeoutMs,
+                    finishAfterFirstMs = json.optLong(
+                        "finishAfterFirstMs",
+                        1_200L,
+                    ).coerceIn(100L, 5_000L),
+                    clickDelaysMs = clickDelays,
+                    matchParts = matchParts,
+                    blockedParts = blockedParts,
+                    userAgent = json.optString("userAgent")
+                        .trim()
+                        .ifBlank { DEFAULT_USER_AGENT },
+                    injectAbyssHook = json.optBoolean("injectAbyssHook", true),
+                    directLoad = json.optBoolean("directLoad", false),
+                    interactionTexts = json.optJSONArray("interactionTexts")
+                        .toVueoStringList()
+                        .map { it.lowercase() }
+                        .ifEmpty { DEFAULT_INTERACTION_TEXTS },
+                    searchText = json.optString("searchText").trim(),
+                    suppressPopups = json.optBoolean("suppressPopups", false),
+                    lockMainFrameHost = json.optBoolean("lockMainFrameHost", false),
+                    viewportWidth = viewportWidth,
+                    viewportHeight = viewportHeight,
+                    clickX = json.optDouble("clickX", viewportWidth / 2.0)
+                        .toFloat(),
+                    clickY = json.optDouble("clickY", viewportHeight / 2.0)
+                        .toFloat(),
+                    blockMatchedRequests = json.optBoolean(
+                        "blockMatchedRequests",
+                        false,
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun injectIntoAbyssPage(
+        pageUrl: String,
+        referer: String,
+        userAgent: String,
+    ): WebResourceResponse {
+        val connection = URL(pageUrl).openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.instanceFollowRedirects = true
+        connection.setRequestProperty("User-Agent", userAgent)
+        connection.setRequestProperty("Referer", referer)
+        connection.setRequestProperty(
+            "Accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        )
+        connection.setRequestProperty(
+            "Accept-Language",
+            "ms-MY,ms;q=0.9,en-US;q=0.8,en;q=0.7",
+        )
+        connection.setRequestProperty("Accept-Encoding", "identity")
+        connection.connectTimeout = 7_000
+        connection.readTimeout = 7_000
+
+        val html = try {
+            connection.inputStream.use { input ->
+                val buffer = okio.Buffer()
+                val bytes = ByteArray(32 * 1024)
+                while (true) {
+                    val count = input.read(bytes)
+                    if (count == -1) break
+                    require(buffer.size + count <= 4L * 1024L * 1024L) {
+                        "WebView HTML exceeds the 4 MiB size limit."
+                    }
+                    buffer.write(bytes, 0, count)
+                }
+                buffer.readUtf8()
+            }
+        } catch (error: Exception) {
+            connection.disconnect()
+            throw error
+        }
+
+        connection.headerFields
+            .filterKeys { it?.equals("Set-Cookie", true) == true }
+            .values
+            .flatten()
+            .forEach { cookie ->
+                runCatching {
+                    CookieManager.getInstance().setCookie(pageUrl, cookie)
+                }
+            }
+        runCatching { CookieManager.getInstance().flush() }
+        connection.disconnect()
+
+        val injected = if (html.contains("<head>", true)) {
+            html.replaceFirst(
+                Regex("<head>", RegexOption.IGNORE_CASE),
+                "<head>$HOOK_JS",
+            )
+        } else {
+            "$HOOK_JS$html"
+        }
+
+        return WebResourceResponse(
+            "text/html",
+            "UTF-8",
+            ByteArrayInputStream(injected.toByteArray(Charsets.UTF_8)),
+        ).apply {
+            responseHeaders = mapOf("Access-Control-Allow-Origin" to "*")
+        }
+    }
+
+    private fun shouldInjectAbyssPage(url: String): Boolean {
+        val value = url.lowercase()
+        return value.contains("abyss") &&
+            (value.contains("?v=") || value.contains("&v="))
+    }
+
+    private fun qualityScore(label: String, url: String): Int {
+        val value = "${label.lowercase()} ${url.lowercase()}"
+        return when {
+            value.contains("2160") -> 2160
+            value.contains("1440") -> 1440
+            value.contains("1080") -> 1080
+            value.contains("720") || value.contains("/1421764806/") -> 720
+            value.contains("480") -> 480
+            value.contains("360") || value.contains("/677311756/") -> 360
+            else -> 0
+        }
+    }
+
+    private fun guessLabel(url: String): String {
+        val value = url.lowercase()
+        return when {
+            value.contains("2160") -> "2160p"
+            value.contains("1440") -> "1440p"
+            value.contains("1080") -> "1080p"
+            value.contains("/1421764806/") || value.contains("720") -> "720p"
+            value.contains("480") -> "480p"
+            value.contains("/677311756/") || value.contains("360") -> "360p"
+            else -> "Auto"
+        }
+    }
+
+    private fun String.toAbsoluteUrl(baseUrl: String): String {
+        val value = trim()
+        return when {
+            value.startsWith("//") -> "https:$value"
+            value.startsWith("http", true) -> value
+            else -> runCatching {
+                URI(baseUrl).resolve(value).toString()
+            }.getOrDefault(value)
+        }
+    }
+
+    private fun htmlEscape(value: String): String =
+        value
+            .replace("&", "&amp;")
+            .replace("\"", "&quot;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+
+
+    companion object {
+        private const val BRIDGE_NAME = "vueoCapture"
+        private const val DEFAULT_WEBVIEW_TIMEOUT_MS = 10_000L
+        private const val MIN_WEBVIEW_TIMEOUT_MS = 1_000L
+        private const val MAX_WEBVIEW_TIMEOUT_MS = 12_000L
+
+        private const val DEFAULT_USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/138.0 Mobile Safari/537.36"
+
+        private val DEFAULT_CLICK_DELAYS_MS = listOf(
+            650L,
+            1_300L,
+            2_200L,
+            3_400L,
+            5_000L,
+            7_000L,
+            9_500L,
+            12_000L,
+        )
+
+        private val DEFAULT_INTERACTION_TEXTS = listOf(
+            "watch now",
+            "start watching",
+            "watch",
+            "play now",
+            "play",
+            "continue",
+            "skip ad",
+            "skip",
+            "close ad",
+            "close",
+        )
+
+        private val DEFAULT_MATCH_PARTS = listOf(
+            "/sora/",
+            ".m3u8",
+            ".mpd",
+            ".mp4",
+            ".m4v",
+            ".webm",
+            ".mkv",
+        )
+
+        private val DEFAULT_DISCOVERY_PARTS = listOf(
+            "/backend_/sources/",
+            "/backend/sources/",
+            "/api/source/",
+            "/api/sources/",
+            "/sources/berkas",
+            "/sources/valstrax",
+            "/sources/burat",
+            "/sources/zinogre",
+            "/sources/daedalus",
+        )
+
+        private val SEGMENT_PARTS = listOf(
+            ".m4s",
+            ".cmfv",
+            ".cmfa",
+            ".ts?",
+            "/segment/",
+            "/segments/",
+            "/chunk/",
+            "/chunks/",
+            "seg-",
+            "segment-",
+            "fragment-",
+            "init.mp4",
+        )
+
+        private const val MIN_DIRECT_VIDEO_BYTES = 512L * 1024L
+
+        private val DEFAULT_BLOCKED_PARTS = listOf(
+            "googlesyndication",
+            "doubleclick.net",
+            "google-analytics",
+            "googletagmanager",
+            "vast",
+            "pixel.morphify",
+            "decafeligiblyhad",
+            "algiersreests",
+            "morestamping",
+        )
+
+        private val BLOCKED_PLAYBACK_HEADERS = setOf(
+            "host",
+            "connection",
+            "accept-encoding",
+            "range",
+            "origin",
+        )
+
+        private const val HOOK_JS = """
+<script>
+(function() {
+  if (window.__vueoHooked) return;
+  window.__vueoHooked = true;
+  var captureSubtitles = "__VUEO_CAPTURE_SUBTITLES__" === "true";
+  var waitForMediaReady = "__VUEO_WAIT_FOR_MEDIA_READY__" === "true";
+  var allowBlobMediaReady = waitForMediaReady && "__VUEO_ALLOW_BLOB_MEDIA_READY__" === "true";
+  var ownedMediaSources = Object.create(null);
+  var lastBlobReady = null;
+  function inspectBlobReady() {
+    if (!allowBlobMediaReady) return;
+    var ready = false;
+    try {
+      var videos = document.querySelectorAll("video");
+      if (videos.length === 1) {
+        var video = videos[0], src = String(video.currentSrc || video.src || "");
+        var owner = ownedMediaSources[src];
+        ready = !!(owner && owner.sourceBuffers && owner.sourceBuffers.length > 0 &&
+          video.readyState >= 2 && !video.error);
+      }
+    } catch(e) {}
+    if (ready !== lastBlobReady) {lastBlobReady=ready;cap("VUEO_BLOB_READY|"+String(ready));}
+  }
+  var captureSessionResponses = waitForMediaReady && "__VUEO_CAPTURE_SESSION_RESPONSES__" === "true";
+  var jsonCapturePrefixes = ["__VUEO_JSON_RESPONSE_PREFIXES__"];
+  var jsonCaptureSeen = Object.create(null);
+  var jsonCaptureLimit = "__VUEO_JSON_SOURCE_COMPLETION_ENABLED__" === "true" ? 8 : 4;
+  function jsonCaptureMatches(url) {
+    if (!captureSessionResponses) return false;
+    try {
+      var actual = new URL(url);
+      return jsonCapturePrefixes.some(function(prefix) {
+        try {var expected=new URL(prefix);return actual.origin===expected.origin &&
+          expected.pathname.slice(-1)==="/" && actual.pathname.indexOf(expected.pathname)===0;} catch(e) {return false;}
+      });
+    } catch(e) {return false;}
+  }
+  function captureJsonResponse(url, status, text) {
+    if (!jsonCaptureMatches(url) || status<200 || status>299 || typeof text!=="string" ||
+        text.length>262144 || jsonCaptureSeen[url]) return;
+    try {
+      var body=JSON.parse(text);
+      if (!body || typeof body!=="object" || Array.isArray(body)) return;
+      if (Object.keys(jsonCaptureSeen).length>=jsonCaptureLimit) return;
+      jsonCaptureSeen[url]=true;
+      cap("VUEO_JSON_RESPONSE|"+JSON.stringify({url:url,status:status,body:text}));
+    } catch(e) {}
+  }
+  function captureHttpResponse(url,status,mime,length) {
+    if (!captureSessionResponses || (status!==200 && status!==206)) return;
+    var lower=String(mime||"").toLowerCase();
+    if (!/^(https?):\/\//i.test(url) || !/mpegurl|dash\+xml|^video\//.test(lower)) return;
+    cap("VUEO_HTTP_RESPONSE|"+JSON.stringify({url:url,status:status,mime:mime,
+      length:parseInt(length||"-1",10),referer:String((window.location && window.location.href)||document.baseURI||"")}));
+  }
+  var subtitleSeen = Object.create(null);
+  function sendSubtitle(track) {
+    try {
+      if (!captureSubtitles || !track || typeof track !== "object") return;
+      var kind = String(track.kind || track.type || "").toLowerCase();
+      if (/thumbnail|chapter|sprite/.test(kind)) return;
+      var url = abs(track.file || track.url || track.src || "");
+      if (!/^https?:\/\//i.test(url)) return;
+      var label = String(track.label || track.name || "");
+      var language = String(track.srclang || track.lang || track.language || "");
+      var key = JSON.stringify([url, label, language]);
+      if (subtitleSeen[key]) return;
+      subtitleSeen[key] = true;
+      cap("VUEO_SUBTITLE|" + JSON.stringify({url:url, label:label, language:language, referer:location.href}));
+    } catch(e) {}
+  }
+  function sendTracks(list) {
+    if (!captureSubtitles || !Array.isArray(list)) return;
+    for (var i=0; i<list.length && i<32; i++) sendSubtitle(list[i]);
+  }
+
+  function cap(value) {
+    try {
+      if (window.vueoCapture && window.vueoCapture.capture) {
+        window.vueoCapture.capture(String(value));
+      }
+    } catch(e) {}
+  }
+
+  function abs(url) {
+    if (!url) return "";
+    try {
+      if (typeof url === "object" && url.url) url = url.url;
+    } catch(e) {}
+    url = String(url || "");
+    if (url.indexOf("//") === 0) return "https:" + url;
+    try { return new URL(url, document.baseURI).href; } catch(e) {}
+    return url;
+  }
+
+  function normalizeText(value) {
+    return String(value || "")
+      .replace(/\\u002f/ig, "/")
+      .replace(/\\\//g, "/")
+      .replace(/&amp;/g, "&");
+  }
+
+  function emitUrls(tag, value) {
+    try {
+      var text = normalizeText(value);
+      if (!text || text.length > 262144) return;
+      var matcher = /(https?:\/\/[^\s"'<>\\]+|\/\/[^\s"'<>\\]+)/ig;
+      var count = 0;
+      var match;
+      while ((match = matcher.exec(text)) && count < 32) {
+        cap("VUEO_CANDIDATE|" + String(tag || "scan") + "|" + abs(match[1]));
+        count++;
+      }
+    } catch(e) {}
+  }
+
+  function scanValue(value, tag, depth, seen) {
+    try {
+      if (depth > 4 || value == null) return;
+      if (typeof value === "string") {
+        emitUrls(tag, value);
+        return;
+      }
+      if (typeof value !== "object") return;
+      seen = seen || (typeof WeakSet !== "undefined" ? new WeakSet() : null);
+      if (seen) {
+        if (seen.has(value)) return;
+        seen.add(value);
+      }
+      if (Array.isArray(value)) {
+        for (var i = 0; i < value.length && i < 64; i++) {
+          scanValue(value[i], tag, depth + 1, seen);
+        }
+        return;
+      }
+      if (captureSubtitles) {
+        var kind = String(value.kind || value.type || "").toLowerCase();
+        var file = String(value.file || value.url || value.src || "");
+        if (/caption|subtitle/.test(kind) || /(?:tracks|subtitles|captions)/i.test(tag) || /\.(?:vtt|srt)(?:$|[?#])/i.test(file)) sendSubtitle(value);
+      }
+      var keys = Object.keys(value);
+      for (var k = 0; k < keys.length && k < 64; k++) {
+        scanValue(value[keys[k]], tag + "." + keys[k], depth + 1, seen);
+      }
+    } catch(e) {}
+  }
+
+  function sendSources(list) {
+    try {
+      if (!list || !list.length) return;
+      for (var i = 0; i < list.length; i++) {
+        var source = list[i] || {};
+        var label = source.label || source.name || source.height || "Auto";
+        var type = source.type || "";
+        var file = source.file || source.url || "";
+        if (file) {
+          cap("VUEO_SOURCE|" + label + "|" + type + "|" + abs(file));
+        }
+      }
+    } catch(e) {}
+  }
+
+  var lastMediaState = "";
+  function inspectMediaState() {
+    if (!waitForMediaReady) return;
+    try {
+      var list = document.querySelectorAll("video"), selected = null;
+      for (var i = 0; i < list.length && i < 16; i++) {
+        if (!selected || list[i].readyState > selected.readyState) selected = list[i];
+      }
+      var src = "";
+      if (selected) {
+        src = selected.currentSrc || selected.src || selected.getAttribute("src") || "";
+        if (!src && selected.querySelector) {
+          var child = selected.querySelector("source");
+          if (child) src = child.src || child.getAttribute("src") || "";
+        }
+      }
+      var kind = !src ? "none" : /^https:/i.test(src) ? "https" : /^http:/i.test(src) ? "http" : /^blob:/i.test(src) ? "blob" : "other";
+      // Only return allowlisted classifications, never page text, URLs or error messages.
+      var text = (String(document.title || "") + " " + String(document.body && document.body.textContent || "").slice(0,8192)).toLowerCase();
+      var signal = /please disable sandbox/.test(text) ? "sandbox_required" :
+        /verify you are human|checking your browser|just a moment|performing security verification/.test(text) ? "human_verification" :
+        /sorry, you have been blocked|access denied|428 forbidden/.test(text) ? "access_denied" :
+        /we couldn't find this content|video unavailable|content unavailable/.test(text) ? "unavailable" : "none";
+      var state = JSON.stringify({count:Math.min(list.length,16),readyState:selected?Number(selected.readyState):-1,
+        networkState:selected?Number(selected.networkState):-1,errorCode:selected&&selected.error?Number(selected.error.code)||0:0,
+        paused:selected?selected.paused!==false:true,sourceKind:kind,pageSignal:signal,visibility:String(document.visibilityState||"unknown")});
+      if (state !== lastMediaState) {lastMediaState=state;cap("VUEO_MEDIA_STATE|"+state);}
+    } catch(e) {}
+  }
+
+  function inspectPlayer() {
+    inspectMediaState();
+    inspectBlobReady();
+    try {
+      if (typeof window.jwplayer === "function") {
+        var player = window.jwplayer();
+        if (player) {
+          if (player.getPlaylist) {
+            var playlist = player.getPlaylist() || [];
+            for (var i = 0; i < playlist.length; i++) {
+              var item = playlist[i] || {};
+              sendSources(item.sources);
+              sendSources(item.allSources);
+              sendTracks(item.tracks);
+            }
+          }
+          if (player.getPlaylistItem) {
+            var current = player.getPlaylistItem() || {};
+            sendSources(current.sources);
+            sendSources(current.allSources);
+            sendTracks(current.tracks);
+          }
+          if (player.getConfig) {
+            var config = player.getConfig() || {};
+            sendSources(config.sources);
+            sendTracks(config.tracks);
+            if (config.playlist && config.playlist.length) {
+              for (var c = 0; c < config.playlist.length; c++) {
+                sendSources((config.playlist[c] || {}).sources);
+                sendSources((config.playlist[c] || {}).allSources);
+                sendTracks((config.playlist[c] || {}).tracks);
+              }
+            }
+          }
+        }
+      }
+
+      if (captureSubtitles) {
+        var tracks = document.querySelectorAll("track[kind='subtitles'],track[kind='captions']");
+        for (var t=0; t<tracks.length && t<32; t++) sendSubtitle({src:tracks[t].src, label:tracks[t].label, srclang:tracks[t].srclang});
+      }
+      var videos = document.querySelectorAll("video,source");
+      for (var v = 0; v < videos.length; v++) {
+        var src = videos[v].currentSrc || videos[v].src || videos[v].getAttribute("src") || "";
+        if (src && String(src).indexOf("blob:") !== 0) {
+          cap("VUEO_VIDEO|" + abs(src));
+          if (waitForMediaReady && String(videos[v].tagName).toLowerCase() === "video" &&
+              videos[v].readyState >= 2 && !videos[v].error) {
+            cap("VUEO_MEDIA_READY|" + abs(src));
+          }
+        }
+      }
+    } catch(e) {}
+  }
+
+  function inspectResponse(response) {
+    try {
+      if (!response) return;
+      var type = "";
+      var length = "-1";
+      try { type = response.headers.get("content-type") || ""; } catch(e) {}
+      try { length = response.headers.get("content-length") || "-1"; } catch(e) {}
+      var responseUrl = abs(response.url || "");
+      if (responseUrl) {
+        cap("VUEO_RESPONSE|" + type + "|" + length + "|" + responseUrl);
+      }
+
+      captureHttpResponse(responseUrl, response.status, type, length);
+      var lower = String(type || "").toLowerCase();
+      var numericLength = parseInt(length || "-1", 10);
+      var textLike =
+        lower.indexOf("json") !== -1 ||
+        lower.indexOf("text/") === 0 ||
+        lower.indexOf("javascript") !== -1 ||
+        lower.indexOf("xml") !== -1 ||
+        lower === "";
+
+      if (textLike && (numericLength < 0 || numericLength <= 524288)) {
+        response.clone().text().then(function(text) {
+          if (lower.indexOf("json")!==-1) captureJsonResponse(responseUrl,response.status,text);
+          emitUrls("fetch-response", text);
+          if (captureSubtitles) { try { scanValue(JSON.parse(text), "fetch-response", 0, null); } catch(e) {} }
+        }).catch(function(){});
+      }
+    } catch(e) {}
+  }
+
+  try {
+    var oldFetch = window.fetch;
+    if (oldFetch) {
+      window.fetch = function() {
+        var requestUrl = "";
+        try { requestUrl = abs(arguments[0]); } catch(e) {}
+        if (requestUrl) cap("VUEO_FETCH|" + requestUrl);
+        return oldFetch.apply(this, arguments).then(function(response) {
+          inspectResponse(response);
+          return response;
+        });
+      };
+    }
+  } catch(e) {}
+
+  try {
+    var oldOpen = XMLHttpRequest.prototype.open;
+    var oldSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(method, requestUrl) {
+      try {
+        this.__vueoRequestUrl = abs(requestUrl);
+        cap("VUEO_XHR|" + this.__vueoRequestUrl);
+      } catch(e) {}
+      return oldOpen.apply(this, arguments);
+    };
+    XMLHttpRequest.prototype.send = function() {
+      try {
+        if (!this.__vueoCaptureBound) {
+          this.__vueoCaptureBound = true;
+          this.addEventListener("load", function() {
+            try {
+              var responseUrl = abs(this.responseURL || this.__vueoRequestUrl || "");
+              var type = this.getResponseHeader("content-type") || "";
+              var length = this.getResponseHeader("content-length") || "-1";
+              if (responseUrl) {
+                cap("VUEO_RESPONSE|" + type + "|" + length + "|" + responseUrl);
+              }
+              captureHttpResponse(responseUrl, this.status, type, length);
+              var lower = String(type || "").toLowerCase();
+              if (lower.indexOf("json")!==-1 && this.responseType==="json") {
+                captureJsonResponse(responseUrl,this.status,JSON.stringify(this.response));
+              }
+              var textLike =
+                lower.indexOf("json") !== -1 ||
+                lower.indexOf("text/") === 0 ||
+                lower.indexOf("javascript") !== -1 ||
+                lower.indexOf("xml") !== -1 ||
+                lower === "";
+              if (textLike && (!this.responseType || this.responseType === "text")) {
+                if (lower.indexOf("json")!==-1) captureJsonResponse(responseUrl,this.status,this.responseText||"");
+                emitUrls("xhr-response", this.responseText || "");
+                if (captureSubtitles) { try { scanValue(JSON.parse(this.responseText), "xhr-response", 0, null); } catch(e) {} }
+              }
+            } catch(e) {}
+          });
+        }
+      } catch(e) {}
+      return oldSend.apply(this, arguments);
+    };
+  } catch(e) {}
+
+  try {
+    var oldJsonParse = JSON.parse;
+    JSON.parse = function(text, reviver) {
+      var result = oldJsonParse.apply(this, arguments);
+      try {
+        setTimeout(function() {
+          scanValue(result, "json-parse", 0, null);
+        }, 0);
+      } catch(e) {}
+      return result;
+    };
+  } catch(e) {}
+
+  try {
+    var oldAtob = window.atob;
+    if (oldAtob) {
+      window.atob = function(value) {
+        var decoded = oldAtob.apply(this, arguments);
+        try {
+          if (decoded && decoded.length <= 262144) emitUrls("atob", decoded);
+        } catch(e) {}
+        return decoded;
+      };
+    }
+  } catch(e) {}
+
+  try {
+    if (window.crypto && window.crypto.subtle && window.crypto.subtle.decrypt) {
+      var oldDecrypt = window.crypto.subtle.decrypt.bind(window.crypto.subtle);
+      window.crypto.subtle.decrypt = function() {
+        return oldDecrypt.apply(this, arguments).then(function(result) {
+          try {
+            if (result && result.byteLength && result.byteLength <= 524288) {
+              var decoded = new TextDecoder("utf-8").decode(result);
+              emitUrls("webcrypto-decrypt", decoded);
+            }
+          } catch(e) {}
+          return result;
+        });
+      };
+    }
+  } catch(e) {}
+
+  try {
+    var oldSetAttribute = Element.prototype.setAttribute;
+    Element.prototype.setAttribute = function(name, value) {
+      try {
+        if (String(name || "").toLowerCase() === "src") {
+          var tag = String(this.tagName || "").toLowerCase();
+          if (tag === "video" || tag === "source") {
+            var mediaUrl = abs(value);
+            if (mediaUrl && mediaUrl.indexOf("blob:") !== 0) {
+              cap("VUEO_VIDEO|" + mediaUrl);
+            }
+          }
+        }
+      } catch(e) {}
+      return oldSetAttribute.apply(this, arguments);
+    };
+  } catch(e) {}
+
+  try {
+    var observer = new MutationObserver(function() {
+      inspectPlayer();
+    });
+    observer.observe(document.documentElement || document, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["src"]
+    });
+  } catch(e) {}
+
+  try {
+    if (window.URL && window.URL.createObjectURL) {
+      var oldCreateObjectURL = window.URL.createObjectURL.bind(window.URL);
+      window.URL.createObjectURL = function(value) {
+        var objectUrl = oldCreateObjectURL(value);
+        if (allowBlobMediaReady && window.MediaSource && value instanceof window.MediaSource) {
+          ownedMediaSources[objectUrl] = value;
+        }
+        try {
+          var type = value && value.type ? String(value.type) : "";
+          var size = value && typeof value.size === "number" ? value.size : -1;
+          cap("VUEO_BLOB|" + type + "|" + size + "|" + objectUrl);
+        } catch(e) {}
+        return objectUrl;
+      };
+    }
+  } catch(e) {}
+
+  try {
+    if (window.MediaSource && window.MediaSource.prototype.addSourceBuffer) {
+      var oldAddSourceBuffer = window.MediaSource.prototype.addSourceBuffer;
+      window.MediaSource.prototype.addSourceBuffer = function(mime) {
+        try { cap("VUEO_MSE|" + String(mime || "")); } catch(e) {}
+        return oldAddSourceBuffer.apply(this, arguments);
+      };
+    }
+  } catch(e) {}
+
+  inspectPlayer();
+  setTimeout(inspectPlayer, 250);
+  setTimeout(inspectPlayer, 600);
+  setTimeout(inspectPlayer, 1000);
+  setTimeout(inspectPlayer, 1800);
+  setInterval(inspectPlayer, 900);
+})();
+</script>
+        """
+
+        private fun errorJson(message: String): String =
+            JSONObject().apply {
+                put("streams", JSONArray())
+                put("error", message)
+            }.toString()
+    }
+}

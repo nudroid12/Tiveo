@@ -1,0 +1,2106 @@
+package com.vueo.shared.core.extensions
+import com.vueo.shared.core.player.SubtitleFlowDiagnostics
+import com.vueo.shared.core.search.SearchPolicy
+
+import com.vueo.shared.core.diagnostics.PerformanceDiagnostics
+import com.vueo.shared.core.diagnostics.PerformanceDiagnostics.Tab
+import com.vueo.shared.core.media.CatalogRow
+import com.vueo.shared.core.media.EpisodeItem
+import com.vueo.shared.core.media.MediaItem
+import com.vueo.shared.core.media.StreamSource
+import com.vueo.shared.core.media.SubtitleTrack
+import com.vueo.shared.core.language.LanguagePolicy
+import com.vueo.shared.core.source.SourceCandidate
+import com.vueo.shared.core.source.SourceSelector
+import com.vueo.shared.core.source.SourceRanker as CoreSourceRanker
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
+
+class UnifiedMediaEngine(
+    private val kidsAgeLimit: () -> Int? = { null },
+) {
+    // Per-engine cache: addon instances/configuration are never shared across engines.
+    private class MetadataKey(
+        val provider: MediaExtension,
+        val type: String,
+        val id: String,
+        val kidsLimit: Int?,
+    ) {
+        override fun equals(other: Any?): Boolean = other is MetadataKey &&
+            provider === other.provider && type == other.type && id == other.id && kidsLimit == other.kidsLimit
+        override fun hashCode(): Int = 31 * (31 * (31 * System.identityHashCode(provider) + type.hashCode()) + id.hashCode()) + (kidsLimit ?: -1)
+    }
+    private val metadataCache = MetadataRequestCache<MetadataKey, MediaItem>(weightOf = ::metadataCacheWeight)
+
+    private suspend fun providerMetadata(provider: MediaExtension, item: MediaItem): MediaItem? {
+        val metadata = metadataCache.getOrLoad(MetadataKey(provider, item.type, item.id, kidsAgeLimit())) {
+            provider.meta(item.type, item.id)
+        }
+        // Cache raw metadata, never an allow/deny decision. Recheck the current
+        // Kids policy on delivery, using the existing merge's rating precedence.
+        return metadata?.takeIf { candidate ->
+            metadataAllowedForKids(item, candidate, kidsAgeLimit())
+        }
+    }
+
+    fun allowsContent(item: MediaItem): Boolean =
+        com.vueo.shared.core.profile.KidsContentPolicy.allows(item.certification, kidsAgeLimit())
+
+    fun filterVisible(items: List<MediaItem>): List<MediaItem> {
+        val limit = kidsAgeLimit() ?: return items
+        return items.filter { com.vueo.shared.core.profile.KidsContentPolicy.allows(it.certification, limit) }
+    }
+
+    fun filterVisibleRows(rows: List<CatalogRow>): List<CatalogRow> {
+        val limit = kidsAgeLimit() ?: return rows
+        return rows.mapNotNull { row ->
+            row.copy(items = row.items.filter {
+                com.vueo.shared.core.profile.KidsContentPolicy.allows(it.certification, limit)
+            }).takeIf { it.items.isNotEmpty() }
+        }
+    }
+
+    suspend fun loadCatalogRows(
+        maxRows: Int = Int.MAX_VALUE,
+        forceRefresh: Boolean = false,
+        catalogOrder: List<String> = emptyList(),
+        disabledCatalogKeys: Set<String> = emptySet(),
+        onPartial: ((List<CatalogRow>) -> Unit)? = null,
+        extensionIds: Set<String>? = null,
+        updateHomeCache: Boolean = true,
+        catalogLoadGate: Semaphore? = null,
+    ): List<CatalogRow> = filterVisibleRows(loadCatalogRowsUnfiltered(
+        maxRows = maxRows,
+        forceRefresh = forceRefresh,
+        catalogOrder = catalogOrder,
+        disabledCatalogKeys = disabledCatalogKeys,
+        onPartial = onPartial?.let { callback -> { values -> callback(filterVisibleRows(values)) } },
+        extensionIds = extensionIds,
+        updateHomeCache = updateHomeCache,
+        catalogLoadGate = catalogLoadGate,
+    ))
+
+    suspend fun search(
+        query: String,
+        maxCatalogs: Int = 12,
+        maxResults: Int = 80,
+        onPartial: ((List<MediaItem>) -> Unit)? = null,
+    ): List<MediaItem> = filterVisible(searchUnfiltered(
+        query = query,
+        maxCatalogs = maxCatalogs,
+        maxResults = maxResults,
+        onPartial = onPartial?.let { callback -> { values -> callback(filterVisible(values)) } },
+    ))
+
+    suspend fun searchActor(
+        query: String,
+        maxCatalogs: Int = 12,
+        maxResults: Int = 80,
+        onPartial: ((List<MediaItem>) -> Unit)? = null,
+    ): List<MediaItem> = filterVisible(searchActorUnfiltered(
+        query = query,
+        maxCatalogs = maxCatalogs,
+        maxResults = maxResults,
+        onPartial = onPartial?.let { callback -> { values -> callback(filterVisible(values)) } },
+    ))
+
+    suspend fun browse(
+        kind: MediaBrowseKind,
+        maxCatalogs: Int = 10,
+        maxResults: Int = 80,
+        catalogOrder: List<String> = emptyList(),
+    ): List<MediaItem> = filterVisible(browseUnfiltered(
+        kind = kind,
+        maxCatalogs = maxCatalogs,
+        maxResults = maxResults,
+        catalogOrder = catalogOrder,
+    ))
+
+    private val registry = InstalledExtensionRegistry()
+    private val extensions: List<MediaExtension> get() = registry.installed()
+
+    private val ACTOR_SEARCH_HINTS =
+        setOf(
+            "actor",
+            "actors",
+            "cast",
+            "person",
+            "people",
+            "performer",
+            "performers",
+            "star",
+            "stars",
+        )
+
+    fun install(extension: MediaExtension, enabledState: (() -> Boolean)? = null) {
+        registry.install(extension, enabledState)
+        metadataCache.invalidate()
+    }
+
+    fun uninstall(id: String) {
+        if (registry.uninstall(id)) metadataCache.invalidate()
+    }
+
+    fun setExtensionEnabled(id: String, enabled: Boolean) {
+        if (registry.setEnabled(id, enabled)) metadataCache.invalidate()
+    }
+
+    fun isExtensionEnabled(id: String): Boolean = registry.isEnabled(id)
+
+    fun installed(): List<MediaExtension> = registry.installed()
+
+    fun stremioAddons(): List<MediaExtension> = extensions
+        .filter { it.descriptor.kind == ExtensionKind.STREMIO_ADDON }
+        .sortedBy { it.descriptor.baseUrl.trim() }
+
+    fun activeStremioAddons(): List<MediaExtension> =
+        stremioAddons().filter { isExtensionEnabled(it.descriptor.installationId) }
+
+    // Old saved media may contain a manifest ID. Resolve it only when unambiguous.
+    fun extension(id: String?): MediaExtension? = registry.extension(id)
+
+    private suspend fun loadCatalogRowsUnfiltered(
+        maxRows: Int = Int.MAX_VALUE,
+        forceRefresh: Boolean = false,
+        catalogOrder: List<String> = emptyList(),
+        disabledCatalogKeys: Set<String> = emptySet(),
+        onPartial: ((List<CatalogRow>) -> Unit)? = null,
+        extensionIds: Set<String>? = null,
+        updateHomeCache: Boolean = true,
+        catalogLoadGate: Semaphore? = null,
+    ): List<CatalogRow> = PerformanceDiagnostics.measureWork("catalog_load", Tab.HOME) {
+        coroutineScope {
+            if (!forceRefresh && extensionIds == null) {
+                CatalogDiscoveryCache
+                    .home()
+                    ?.let { cachedRows ->
+                        val enabledCachedRows =
+                            orderCatalogRows(
+                                rows = cachedRows.filter { row ->
+                                    activeStremioAddons().any { addon ->
+                                        row.id.startsWith("${addon.descriptor.installationId}:")
+                                    }
+                                },
+                                catalogOrder = catalogOrder,
+                                disabledCatalogKeys = disabledCatalogKeys,
+                            ).take(maxRows)
+
+                        if (enabledCachedRows.isNotEmpty()) {
+                            return@coroutineScope enabledCachedRows
+                        }
+                    }
+            }
+
+            val orderIndex =
+                catalogOrder
+                    .withIndex()
+                    .associate {
+                        it.value to it.index
+                    }
+
+            val candidates =
+                activeStremioAddons()
+                    .filter { extensionIds == null || it.descriptor.installationId in extensionIds }
+                    .flatMap { extension ->
+                        extension.descriptor.catalogs
+                            .filter { catalog ->
+                                catalog.shouldShowOnHome &&
+                                    catalogKey(
+                                        extensionId = extension.descriptor.installationId,
+                                        type = catalog.type,
+                                        catalogId = catalog.id,
+                                    ) !in disabledCatalogKeys
+                            }
+                            .map { catalog ->
+                                extension to catalog
+                            }
+                    }
+                    .sortedBy {
+                        (extension, catalog) ->
+                        orderIndex[
+                            catalogKey(
+                                extensionId =
+                                    extension.descriptor.installationId,
+                                type = catalog.type,
+                                catalogId = catalog.id,
+                            )
+                        ] ?: Int.MAX_VALUE
+                    }
+                    .let { catalogs ->
+                        if (maxRows == Int.MAX_VALUE) catalogs else catalogs.take(maxRows)
+                    }
+
+            val loadedRows = linkedMapOf<String, CatalogRow>()
+            val loadedRowsMutex = Mutex()
+            val loadSemaphore = catalogLoadGate ?: Semaphore(HOME_CATALOG_LOAD_CONCURRENCY)
+            var lastEmittedRowCount = 0
+            val candidateIndex =
+                candidates
+                    .mapIndexed { index, (extension, catalog) ->
+                        catalogKey(
+                            extensionId = extension.descriptor.installationId,
+                            type = catalog.type,
+                            catalogId = catalog.id,
+                        ) to index
+                    }
+                    .toMap()
+
+            candidates
+                .map { (extension, catalog) ->
+                    async {
+                        loadSemaphore.withPermit {
+                            runCatching {
+                                val page =
+                                    withTimeoutOrNull(
+                                        ADDON_REQUEST_TIMEOUT_MS
+                                    ) {
+                                        extension.catalog(
+                                            catalog.type,
+                                            catalog.id,
+                                        )
+                                    }
+                                        ?: return@runCatching null
+
+                                val row = CatalogRow(
+                                    id =
+                                        catalogKey(
+                                            extensionId =
+                                                extension.descriptor.installationId,
+                                            type =
+                                                catalog.type,
+                                            catalogId =
+                                                catalog.id,
+                                        ),
+                                    title =
+                                        catalog.name
+                                            ?: "${extension.descriptor.name} " +
+                                                catalog.type
+                                                    .replaceFirstChar {
+                                                        it.uppercase()
+                                                    },
+                                    providerName =
+                                        extension
+                                            .descriptor
+                                            .name,
+                                    items =
+                                        page.items.map {
+                                            item ->
+                                            item.withCatalogSource(
+                                                extension.descriptor.name
+                                            )
+                                        },
+                                )
+                                if (row.items.isEmpty()) return@runCatching null
+
+                                loadedRowsMutex.withLock {
+                                    loadedRows[row.id] = row
+                                    val ordered =
+                                        orderCatalogRows(
+                                            rows = loadedRows.values.sortedBy { candidateIndex[it.id] },
+                                            catalogOrder = catalogOrder,
+                                            disabledCatalogKeys = disabledCatalogKeys,
+                                        )
+                                    lastEmittedRowCount = ordered.size
+                                    // Publish under the same lock so concurrent completions
+                                    // cannot send an older snapshot after a newer one.
+                                    onPartial?.invoke(ordered)
+                                    ordered to true
+                                }
+
+                                row
+                            }.getOrNull()
+                        }
+                    }
+                }
+                .awaitAll()
+
+            val (rows, shouldEmitFinalRows) = loadedRowsMutex.withLock {
+                val ordered =
+                    orderCatalogRows(
+                        rows = loadedRows.values.sortedBy { candidateIndex[it.id] },
+                        catalogOrder = catalogOrder,
+                        disabledCatalogKeys = disabledCatalogKeys,
+                    )
+                ordered to (ordered.size != lastEmittedRowCount)
+            }
+
+            if (shouldEmitFinalRows) onPartial?.invoke(rows)
+
+            if (updateHomeCache) CatalogDiscoveryCache.putHome(rows)
+
+            rows
+        }
+    }
+
+    private fun catalogKey(
+        extensionId: String,
+        type: String,
+        catalogId: String,
+    ): String =
+        "$extensionId:$type:$catalogId"
+
+    private fun orderCatalogRows(
+        rows: List<CatalogRow>,
+        catalogOrder: List<String>,
+        disabledCatalogKeys: Set<String> = emptySet(),
+    ): List<CatalogRow> = com.vueo.shared.core.home.HomeCatalogPolicy.orderRows(
+        rows, catalogOrder, disabledCatalogKeys,
+        defaultCatalogOrder = com.vueo.shared.core.home.HomeCatalogPolicy.defaultOrder(activeStremioAddons()),
+    )
+
+    private suspend fun searchUnfiltered(
+        query: String,
+        maxCatalogs: Int = 12,
+        maxResults: Int = 80,
+        onPartial: ((List<MediaItem>) -> Unit)? = null,
+    ): List<MediaItem> = coroutineScope {
+        val normalized = query.trim()
+
+        if (normalized.length < 2) {
+            return@coroutineScope emptyList<MediaItem>()
+        }
+
+        CatalogDiscoveryCache
+            .search(normalized)
+            ?.let { cached ->
+                return@coroutineScope rankSearchResults(
+                    items = cached,
+                    query = normalized,
+                ).take(maxResults)
+            }
+
+        val searchableCatalogs =
+            activeStremioAddons()
+                .flatMap { extension ->
+                    extension.descriptor.catalogs
+                        .filter { catalog ->
+                            val hasSearch =
+                                catalog.extras.any {
+                                    it.name == "search"
+                                }
+
+                            val requiredSupported =
+                                catalog.extras
+                                    .filter {
+                                        it.isRequired
+                                    }
+                                    .all {
+                                        it.name == "search"
+                                    }
+
+                            hasSearch &&
+                                requiredSupported
+                        }
+                        .map { catalog ->
+                            extension to catalog
+                        }
+                }
+                .take(maxCatalogs)
+
+        val local =
+            CatalogDiscoveryCache
+                .searchLocal(
+                    normalized,
+                    limit = maxResults,
+                )
+
+        val collectedRemote =
+            mutableListOf<MediaItem>()
+        val mergeMutex =
+            Mutex()
+
+        val remote =
+            searchableCatalogs
+                .map {
+                    (extension, catalog) ->
+
+                    async {
+                        val result =
+                            try {
+                                withTimeoutOrNull(
+                                    ADDON_REQUEST_TIMEOUT_MS
+                                ) {
+                                    extension.catalog(
+                                        type =
+                                            catalog.type,
+                                        catalogId =
+                                            catalog.id,
+                                        extras =
+                                            mapOf(
+                                                "search" to
+                                                    normalized
+                                            ),
+                                    ).items
+                                        .map {
+                                            item ->
+                                            item.withCatalogSource(
+                                                extension.descriptor.name
+                                            )
+                                        }
+                                }
+                                    ?: emptyList()
+                            } catch (
+                                cancelled:
+                                    CancellationException
+                            ) {
+                                throw cancelled
+                            } catch (
+                                _: Throwable
+                            ) {
+                                emptyList()
+                            }
+
+                        if (result.isNotEmpty()) {
+                            mergeMutex.withLock {
+                                collectedRemote +=
+                                    result
+
+                                onPartial?.invoke(
+                                    rankSearchResults(
+                                        items =
+                                            collectedRemote +
+                                                local,
+                                        query =
+                                            normalized,
+                                    ).take(
+                                        maxResults
+                                    )
+                                )
+                            }
+                        }
+
+                        result
+                    }
+                }
+                .awaitAll()
+                .flatten()
+
+        val combined =
+            rankSearchResults(
+                items = remote + local,
+                query = normalized,
+            ).take(maxResults)
+
+        CatalogDiscoveryCache.putSearch(
+            normalized,
+            combined,
+        )
+
+        combined
+    }
+
+    /**
+     * Search enabled metadata catalogs that explicitly advertise actor/person
+     * filtering. Catalogs without an actor-capable extra are skipped entirely,
+     * so actor mode never brute-force scans the regular title database.
+     */
+    private suspend fun searchActorUnfiltered(
+        query: String,
+        maxCatalogs: Int = 12,
+        maxResults: Int = 80,
+        onPartial: ((List<MediaItem>) -> Unit)? = null,
+    ): List<MediaItem> = coroutineScope {
+        val normalized = query.trim()
+
+        if (normalized.length < 2) {
+            return@coroutineScope emptyList<MediaItem>()
+        }
+
+        val bindings =
+            activeStremioAddons()
+                .flatMap { extension ->
+                    extension.descriptor.catalogs
+                        .mapNotNull { catalog ->
+                            actorCatalogExtras(
+                                catalog = catalog,
+                                query = normalized,
+                            )?.let { extras ->
+                                ActorCatalogBinding(
+                                    extension = extension,
+                                    catalog = catalog,
+                                    extras = extras,
+                                )
+                            }
+                        }
+                }
+                .take(maxCatalogs)
+
+        if (bindings.isEmpty()) {
+            return@coroutineScope emptyList<MediaItem>()
+        }
+
+        val sourceFingerprint =
+            bindings
+                .map { binding ->
+                    "${binding.extension.descriptor.installationId}:${binding.catalog.id}"
+                }
+                .sorted()
+                .joinToString("|")
+                .hashCode()
+
+        val cacheKey =
+            "actor $sourceFingerprint $normalized"
+
+        CatalogDiscoveryCache
+            .search(cacheKey)
+            ?.let { cached ->
+                return@coroutineScope mergeActorResults(
+                    items = cached,
+                    maxResults = maxResults,
+                )
+            }
+
+        val collected =
+            mutableListOf<MediaItem>()
+        val mergeMutex = Mutex()
+
+        val remote =
+            bindings
+                .map { binding ->
+                    async {
+                        val result =
+                            try {
+                                withTimeoutOrNull(
+                                    ADDON_REQUEST_TIMEOUT_MS
+                                ) {
+                                    binding.extension
+                                        .catalog(
+                                            type =
+                                                binding.catalog.type,
+                                            catalogId =
+                                                binding.catalog.id,
+                                            extras =
+                                                binding.extras,
+                                        )
+                                        .items
+                                        .filter(
+                                            ::isActorSearchMediaItem
+                                        )
+                                        .map { item ->
+                                            item
+                                                .normalizeActorSearchType()
+                                                .withCatalogSource(
+                                                    binding.extension
+                                                        .descriptor
+                                                        .name
+                                                )
+                                        }
+                                } ?: emptyList()
+                            } catch (
+                                cancelled: CancellationException
+                            ) {
+                                throw cancelled
+                            } catch (
+                                _: Throwable
+                            ) {
+                                emptyList()
+                            }
+
+                        if (result.isNotEmpty()) {
+                            mergeMutex.withLock {
+                                collected += result
+                                onPartial?.invoke(
+                                    mergeActorResults(
+                                        items = collected,
+                                        maxResults = maxResults,
+                                    )
+                                )
+                            }
+                        }
+
+                        result
+                    }
+                }
+                .awaitAll()
+                .flatten()
+
+        val combined =
+            mergeActorResults(
+                items = remote,
+                maxResults = maxResults,
+            )
+
+        CatalogDiscoveryCache.putSearch(
+            cacheKey,
+            combined,
+        )
+
+        combined
+    }
+
+    fun hasActorSearchAddons(): Boolean =
+        activeStremioAddons()
+            .any { extension ->
+                extension.descriptor.catalogs
+                    .any(
+                        ::actorCatalogSupportsLookup
+                    )
+            }
+
+    fun mergeActorResults(
+        items: List<MediaItem>,
+        maxResults: Int = 80,
+    ): List<MediaItem> =
+        mergeSearchDuplicates(
+            items =
+                items.filter(
+                    ::isActorSearchMediaItem
+                ),
+            query = "",
+        )
+            .take(maxResults)
+
+    private fun actorCatalogSupportsLookup(
+        catalog: CatalogDescriptor,
+    ): Boolean {
+        val hasActorExtra =
+            catalog.extras.any { extra ->
+                isActorExtraName(
+                    extra.name
+                )
+            }
+        val hasSearchExtra =
+            catalog.extras.any { extra ->
+                extra.name.equals(
+                    "search",
+                    ignoreCase = true,
+                )
+            }
+
+        if (
+            !hasActorExtra &&
+            !(
+                actorCatalogHint(catalog) &&
+                    hasSearchExtra
+            )
+        ) {
+            return false
+        }
+
+        return catalog.extras
+            .filter { it.isRequired }
+            .all { extra ->
+                isActorExtraName(
+                    extra.name
+                ) ||
+                    extra.name.equals(
+                        "search",
+                        ignoreCase = true,
+                    )
+            }
+    }
+
+    private fun actorCatalogExtras(
+        catalog: CatalogDescriptor,
+        query: String,
+    ): Map<String, String>? {
+        if (!actorCatalogSupportsLookup(catalog)) {
+            return null
+        }
+
+        val actorExtras =
+            catalog.extras.filter { extra ->
+                isActorExtraName(
+                    extra.name
+                )
+            }
+        val actorValues =
+            actorExtras.mapNotNull { extra ->
+                actorExtraValue(
+                    extra = extra,
+                    query = query,
+                )?.let { value ->
+                    extra to value
+                }
+            }
+        val searchExtra =
+            catalog.extras.firstOrNull { extra ->
+                extra.name.equals(
+                    "search",
+                    ignoreCase = true,
+                )
+            }
+        val actorCatalog =
+            actorCatalogHint(
+                catalog
+            )
+
+        if (
+            actorValues.isEmpty() &&
+            !(actorCatalog && searchExtra != null)
+        ) {
+            return null
+        }
+
+        val requiredSupported =
+            catalog.extras
+                .filter { it.isRequired }
+                .all { extra ->
+                    when {
+                        isActorExtraName(
+                            extra.name
+                        ) ->
+                            actorValues.any { pair ->
+                                pair.first.name ==
+                                    extra.name
+                            }
+
+                        extra.name.equals(
+                            "search",
+                            ignoreCase = true,
+                        ) -> true
+
+                        else -> false
+                    }
+                }
+
+        if (!requiredSupported) {
+            return null
+        }
+
+        return buildMap {
+            actorValues
+                .firstOrNull()
+                ?.let { pair ->
+                    put(
+                        pair.first.name,
+                        pair.second,
+                    )
+                }
+
+            actorValues
+                .filter { pair ->
+                    pair.first.isRequired
+                }
+                .forEach { pair ->
+                    put(
+                        pair.first.name,
+                        pair.second,
+                    )
+                }
+
+            if (
+                searchExtra != null &&
+                (
+                    actorCatalog ||
+                        searchExtra.isRequired
+                )
+            ) {
+                put(
+                    searchExtra.name,
+                    query,
+                )
+            }
+        }.takeIf { it.isNotEmpty() }
+    }
+
+    private fun actorExtraValue(
+        extra: CatalogExtraDescriptor,
+        query: String,
+    ): String? {
+        if (extra.options.isEmpty()) {
+            return query
+        }
+
+        val normalizedQuery =
+            normalizeSearchText(
+                query
+            )
+
+        return extra.options
+            .firstOrNull { option ->
+                normalizeSearchText(
+                    option
+                ) == normalizedQuery
+            }
+    }
+
+    private fun actorCatalogHint(
+        catalog: CatalogDescriptor,
+    ): Boolean {
+        val value =
+            listOfNotNull(
+                catalog.type,
+                catalog.id,
+                catalog.name,
+            )
+                .joinToString(" ")
+                .lowercase()
+                .replace(
+                    Regex("""[^a-z0-9]+"""),
+                    " ",
+                )
+
+        return ACTOR_SEARCH_HINTS.any { hint ->
+            Regex("(?:^|\\s)${Regex.escape(hint)}(?:$|\\s)")
+                .containsMatchIn(value)
+        }
+    }
+
+    private fun isActorExtraName(
+        name: String,
+    ): Boolean {
+        val words =
+            name
+                .trim()
+                .replace(
+                    Regex("([a-z0-9])([A-Z])"),
+                    "$1 $2",
+                )
+                .lowercase()
+                .replace(
+                    Regex("""[^a-z0-9]+"""),
+                    " ",
+                )
+                .trim()
+                .split(Regex("""\s+"""))
+                .filter { it.isNotBlank() }
+
+        if (words.size == 1) {
+            return words.first() in
+                ACTOR_SEARCH_HINTS
+        }
+
+        val first =
+            words.firstOrNull()
+                ?: return false
+
+        if (
+            first !in ACTOR_SEARCH_HINTS ||
+            "id" in words
+        ) {
+            return false
+        }
+
+        return words
+            .drop(1)
+            .all { suffix ->
+                suffix in
+                    setOf(
+                        "name",
+                        "member",
+                        "members",
+                        "query",
+                        "filter",
+                    )
+            }
+    }
+
+    private fun isActorSearchMediaItem(
+        item: MediaItem,
+    ): Boolean =
+        when (
+            item.type
+                .trim()
+                .lowercase()
+        ) {
+            "movie",
+            "film",
+            "series",
+            "tv",
+            "show",
+            "anime" -> true
+            else -> false
+        }
+
+    private fun MediaItem.normalizeActorSearchType(): MediaItem {
+        val normalizedType =
+            when (
+                type.trim().lowercase()
+            ) {
+                "film" -> "movie"
+                "tv",
+                "show" -> "series"
+                else -> type
+            }
+
+        return if (normalizedType == type) {
+            this
+        } else {
+            copy(type = normalizedType)
+        }
+    }
+
+    private data class ActorCatalogBinding(
+        val extension: MediaExtension,
+        val catalog: CatalogDescriptor,
+        val extras: Map<String, String>,
+    )
+
+    private fun rankSearchResults(
+        items: List<MediaItem>,
+        query: String,
+    ): List<MediaItem> =
+        SearchPolicy.rankAndDedupe(
+            items = items,
+            query = query,
+        )
+
+    private fun mergeSearchDuplicates(
+        items: List<MediaItem>,
+        query: String,
+    ): List<MediaItem> {
+        val groups =
+            mutableListOf<
+                MutableList<MediaItem>
+            >()
+
+        items.forEach {
+            candidate ->
+
+            val candidateTitle =
+                searchCanonicalTitle(
+                    candidate
+                )
+            val candidateType =
+                searchCanonicalType(
+                    candidate.type
+                )
+            val candidateYear =
+                searchReleaseYear(
+                    candidate
+                )
+
+            val target =
+                groups.firstOrNull {
+                    group ->
+                    val sample =
+                        group.first()
+
+                    val sampleTitle =
+                        searchCanonicalTitle(
+                            sample
+                        )
+                    val sampleType =
+                        searchCanonicalType(
+                            sample.type
+                        )
+                    val sampleYear =
+                        searchReleaseYear(
+                            sample
+                        )
+
+                    candidateTitle.isNotBlank() &&
+                        candidateTitle ==
+                            sampleTitle &&
+                        candidateType ==
+                            sampleType &&
+                        (
+                            candidateYear == 0 ||
+                                sampleYear == 0 ||
+                                kotlin.math.abs(
+                                    candidateYear -
+                                        sampleYear
+                                ) <= 1
+                        )
+                }
+
+            if (target == null) {
+                groups +=
+                    mutableListOf(
+                        candidate
+                    )
+            } else {
+                target += candidate
+            }
+        }
+
+        return groups.mapNotNull {
+            duplicates ->
+
+            val best =
+                duplicates.maxByOrNull {
+                    item ->
+                    (
+                        searchRelevanceScore(
+                            item = item,
+                            query = query,
+                        ) *
+                            100
+                    ) +
+                        searchMetadataScore(
+                            item
+                        )
+                }
+                    ?: return@mapNotNull null
+
+            val catalogs =
+                (
+                    best.catalogSources +
+                        duplicates
+                            .flatMap {
+                                item ->
+                                item.catalogSources
+                            }
+                )
+                    .map {
+                        it.trim()
+                    }
+                    .filter {
+                        it.isNotBlank()
+                    }
+                    .distinctBy {
+                        it.lowercase()
+                    }
+
+            val mergedGenres =
+                duplicates
+                    .flatMap {
+                        it.genres
+                    }
+                    .distinctBy {
+                        it.lowercase()
+                    }
+
+            best.copy(
+                catalogSources =
+                    catalogs,
+                genres =
+                    mergedGenres,
+                popularity =
+                    duplicates
+                        .mapNotNull { it.popularity }
+                        .maxOrNull()
+                        ?: best.popularity,
+            )
+        }
+    }
+
+    private fun searchCanonicalTitle(item: MediaItem): String =
+        SearchPolicy.canonicalTitle(item)
+
+    private fun searchCanonicalType(value: String): String =
+        SearchPolicy.canonicalType(value)
+
+    private fun searchRelevanceScore(item: MediaItem, query: String): Int =
+        SearchPolicy.relevanceScore(item, query)
+
+    private fun searchMetadataScore(item: MediaItem): Int =
+        SearchPolicy.metadataScore(item)
+
+    private fun searchReleaseYear(item: MediaItem): Int =
+        SearchPolicy.releaseYear(item)
+
+    private fun normalizeSearchText(value: String): String =
+        SearchPolicy.normalizeText(value)
+
+    private fun MediaItem.withCatalogSource(
+        source: String?,
+    ): MediaItem {
+        val cleaned =
+            source
+                ?.trim()
+                ?.takeIf {
+                    it.isNotBlank()
+                }
+                ?: return this
+
+        return copy(
+            catalogSources =
+                (
+                    catalogSources +
+                        cleaned
+                )
+                    .distinctBy {
+                        it.lowercase()
+                    }
+        )
+    }
+
+    /**
+     * Canonical browse discovery shared by Mobile and TV.
+     *
+     * It only queries enabled Stremio catalog extensions. Movie/Series use
+     * catalogs that require no extras. Anime additionally supports catalogs
+     * explicitly named for anime and catalogs that expose a genre=Anime extra.
+     */
+    private suspend fun browseUnfiltered(
+        kind: MediaBrowseKind,
+        maxCatalogs: Int = 10,
+        maxResults: Int = 80,
+        catalogOrder: List<String> = emptyList(),
+    ): List<MediaItem> = coroutineScope {
+        val orderIndex =
+            catalogOrder
+                .withIndex()
+                .associate {
+                    it.value to it.index
+                }
+
+        val bindings =
+            activeStremioAddons()
+                .flatMap { extension ->
+                    extension.descriptor.catalogs
+                        .mapNotNull { catalog ->
+                            browseExtras(
+                                kind = kind,
+                                catalog = catalog,
+                            )?.let { extras ->
+                                BrowseCatalogBinding(
+                                    extension = extension,
+                                    catalog = catalog,
+                                    extras = extras,
+                                )
+                            }
+                        }
+                }
+                .distinctBy { binding ->
+                    catalogKey(
+                        extensionId = binding.extension.descriptor.installationId,
+                        type = binding.catalog.type,
+                        catalogId = binding.catalog.id,
+                    ) + binding.extras.toString()
+                }
+                .sortedWith(
+                    compareBy<BrowseCatalogBinding> { binding ->
+                        orderIndex[
+                            catalogKey(
+                                extensionId = binding.extension.descriptor.installationId,
+                                type = binding.catalog.type,
+                                catalogId = binding.catalog.id,
+                            )
+                        ] ?: Int.MAX_VALUE
+                    }.thenBy { binding ->
+                        binding.extension.descriptor.name.lowercase()
+                    }.thenBy { binding ->
+                        binding.catalog.name
+                            ?.lowercase()
+                            .orEmpty()
+                    }
+                )
+                .take(maxCatalogs)
+
+        val loaded =
+            bindings
+                .map { binding ->
+                    async {
+                        try {
+                            withTimeoutOrNull(
+                                ADDON_REQUEST_TIMEOUT_MS
+                            ) {
+                                binding.extension
+                                    .catalog(
+                                        type = binding.catalog.type,
+                                        catalogId = binding.catalog.id,
+                                        extras = binding.extras,
+                                    )
+                                    .items
+                                    .map { item ->
+                                        item.withCatalogSource(
+                                            binding.extension.descriptor.name
+                                        )
+                                    }
+                            } ?: emptyList()
+                        } catch (
+                            cancelled: CancellationException
+                        ) {
+                            throw cancelled
+                        } catch (
+                            _: Throwable
+                        ) {
+                            emptyList()
+                        }
+                    }
+                }
+                .awaitAll()
+                .flatten()
+                .filter { item ->
+                    browseAccepts(
+                        kind = kind,
+                        item = item,
+                    )
+                }
+
+        mergeSearchDuplicates(
+            items = loaded,
+            query = "",
+        ).take(maxResults)
+    }
+
+    private fun browseExtras(
+        kind: MediaBrowseKind,
+        catalog: CatalogDescriptor,
+    ): Map<String, String>? {
+        val type = catalog.type.trim().lowercase()
+        val isMovie = type == "movie"
+        val isSeries = type == "series" || type == "tv"
+
+        return when (kind) {
+            MediaBrowseKind.MOVIE ->
+                if (isMovie && catalog.canLoadWithoutExtras) {
+                    emptyMap()
+                } else {
+                    null
+                }
+
+            MediaBrowseKind.SERIES ->
+                if (isSeries && catalog.canLoadWithoutExtras) {
+                    emptyMap()
+                } else {
+                    null
+                }
+
+            MediaBrowseKind.ANIME -> {
+                if (!isMovie && !isSeries) {
+                    return null
+                }
+
+                val explicitAnime =
+                    catalog.id.contains(
+                        "anime",
+                        ignoreCase = true,
+                    ) ||
+                        catalog.name
+                            ?.contains(
+                                "anime",
+                                ignoreCase = true,
+                            ) == true
+
+                if (
+                    explicitAnime &&
+                    catalog.canLoadWithoutExtras
+                ) {
+                    return emptyMap()
+                }
+
+                val genreExtra =
+                    catalog.extras.firstOrNull { extra ->
+                        extra.name.equals(
+                            "genre",
+                            ignoreCase = true,
+                        ) &&
+                            (
+                                extra.options.isEmpty() ||
+                                    extra.options.any { option ->
+                                        option.equals(
+                                            "Anime",
+                                            ignoreCase = true,
+                                        )
+                                    }
+                                )
+                    }
+
+                val requiredSupported =
+                    catalog.extras
+                        .filter { it.isRequired }
+                        .all { extra ->
+                            extra.name.equals(
+                                "genre",
+                                ignoreCase = true,
+                            )
+                        }
+
+                if (
+                    genreExtra != null &&
+                    requiredSupported
+                ) {
+                    mapOf("genre" to "Anime")
+                } else {
+                    null
+                }
+            }
+        }
+    }
+
+    private fun browseAccepts(
+        kind: MediaBrowseKind,
+        item: MediaItem,
+    ): Boolean {
+        val type = item.type.trim().lowercase()
+        val isMovie = type == "movie"
+        val isSeries = type == "series" || type == "tv"
+
+        return when (kind) {
+            MediaBrowseKind.MOVIE -> isMovie
+            MediaBrowseKind.SERIES -> isSeries
+            MediaBrowseKind.ANIME -> isMovie || isSeries
+        }
+    }
+
+    private data class BrowseCatalogBinding(
+        val extension: MediaExtension,
+        val catalog: CatalogDescriptor,
+        val extras: Map<String, String>,
+    )
+
+    suspend fun loadMeta(
+        item: MediaItem,
+    ): MediaItem = PerformanceDiagnostics.measureWork("metadata_load", Tab.DETAILS) {
+        coroutineScope {
+            val preferredInstallationId = extension(item.sourceExtensionId)?.descriptor?.installationId
+            val providers =
+                activeStremioAddons()
+                    .filter { extension ->
+                        "meta" in extension.descriptor.resources &&
+                            (
+                                extension.descriptor.types.isEmpty() ||
+                                    item.type in extension.descriptor.types
+                                )
+                    }
+                    .sortedBy { extension ->
+                        if (
+                            extension.descriptor.installationId == preferredInstallationId
+                        ) {
+                            0
+                        } else {
+                            1
+                        }
+                    }
+
+            if (providers.isEmpty()) {
+                return@coroutineScope item
+            }
+
+            val primaryProvider =
+                providers.firstOrNull {
+                    it.descriptor.installationId == preferredInstallationId
+                }
+            val primaryMetadata =
+                primaryProvider?.let { provider ->
+                    try {
+                        withTimeoutOrNull(
+                            ADDON_REQUEST_TIMEOUT_MS
+                        ) {
+                            providerMetadata(provider, item)
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+
+            // Detail Back cancels the caller. Never let a provider failure wrapper
+            // turn that cancellation into a normal "no metadata" result and continue
+            // towards the 8s/4s fallback windows.
+            currentCoroutineContext().ensureActive()
+            val primaryResult =
+                primaryMetadata?.let { metadata ->
+                    mergeMediaMetadata(
+                        current = item,
+                        candidate = metadata,
+                        sourceExtensionId = preferredInstallationId ?: item.sourceExtensionId,
+                    )
+                } ?: item
+
+            if (!needsMetadataFallback(primaryResult)) {
+                return@coroutineScope primaryResult
+            }
+
+            val fallbackMetadata =
+                providers
+                    .filterNot {
+                        it === primaryProvider
+                    }
+                    .map { provider ->
+                        async {
+                            try {
+                                withTimeoutOrNull(
+                                    METADATA_FALLBACK_TIMEOUT_MS
+                                ) {
+                                    providerMetadata(provider, item)
+                                }
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                null
+                            }
+                        }
+                    }
+                    .awaitAll()
+                    .filterNotNull()
+
+            currentCoroutineContext().ensureActive()
+
+            fallbackMetadata.fold(primaryResult) { merged, candidate ->
+                mergeMediaMetadata(
+                    current = merged,
+                    candidate = candidate,
+                    sourceExtensionId = preferredInstallationId ?: item.sourceExtensionId,
+                )
+            }
+        }
+    }
+
+    suspend fun resolveStreams(
+        type: String,
+        videoId: String,
+    ): List<StreamSource> =
+        resolveStreamsProgressive(
+            type = type,
+            videoId = videoId,
+            onProgress = {},
+        )
+
+    suspend fun resolveStreamsProgressive(
+        type: String,
+        videoId: String,
+        providerNameFilter: String? = null,
+        cleanResults: Boolean = true,
+        onActivity: (AddonRequestActivity) -> Unit = {},
+        onProgress: suspend (AddonStreamProgress) -> Unit,
+    ): List<StreamSource> = coroutineScope {
+        val providers =
+            extensions.filter {
+                isExtensionEnabled(
+                    it.descriptor.installationId
+                ) &&
+                    "stream" in
+                        it.descriptor.resources &&
+                    (providerNameFilter == null || it.descriptor.name.equals(providerNameFilter, true)) &&
+                    it.descriptor.supportsAddonRequest("stream", type, videoId)
+            }
+
+        if (providers.isEmpty()) {
+            return@coroutineScope emptyList()
+        }
+
+        val mutex = Mutex()
+        val rawStreams =
+            mutableListOf<StreamSource>()
+
+        var completed = 0
+
+        // Announce the complete provider set before any request starts. TV can
+        // therefore render every provider tab immediately instead of waiting
+        // for the first provider response to reveal that the provider exists.
+        providers.forEach { extension ->
+            onActivity(
+                AddonRequestActivity(
+                    providerName = extension.descriptor.name,
+                    resource = "sources",
+                    phase = "started",
+                )
+            )
+        }
+
+        providers.map { extension ->
+            async {
+                val providerName = extension.descriptor.name
+                val startedAtNs = System.nanoTime()
+                var phase = "completed"
+                var errorType: String? = null
+                val result = try {
+                    withTimeoutOrNull(
+                        ADDON_STREAM_TIMEOUT_MS
+                    ) {
+                        extension.streams(
+                            type,
+                            videoId,
+                        )
+                    } ?: run {
+                        phase = "timeout"
+                        emptyList()
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    phase = "failed"
+                    errorType = error::class.java.simpleName
+                    emptyList()
+                }
+                val progress =
+                    mutex.withLock {
+                        rawStreams += result
+                        completed++
+
+                        AddonStreamProgress(
+                            streams =
+                                if (cleanResults) SourceCleaner.clean(rawStreams) else rawStreams.toList(),
+                            rawCount =
+                                rawStreams.size,
+                            completedAddons =
+                                completed,
+                            totalAddons =
+                                providers.size,
+                        )
+                    }
+
+                onProgress(progress)
+                // Publish the merged result before marking this provider done.
+                // A successful provider therefore changes directly from
+                // loading -> populated without its tab flickering away.
+                onActivity(
+                    AddonRequestActivity(
+                        providerName = providerName,
+                        resource = "sources",
+                        phase = phase,
+                        resultCount = result.size,
+                        elapsedMs =
+                            (System.nanoTime() - startedAtNs) / 1_000_000L,
+                        errorType = errorType,
+                    )
+                )
+            }
+        }.awaitAll()
+
+        mutex.withLock {
+            if (cleanResults) SourceCleaner.clean(rawStreams) else rawStreams.toList()
+        }
+    }
+
+    suspend fun resolveSubtitles(
+        type: String,
+        videoId: String,
+        allowedLanguageCodes: Set<String>? = null,
+        onProgress: (List<SubtitleTrack>) -> Unit = {},
+        onInitialPassComplete: () -> Unit = {},
+        onActivity: (AddonRequestActivity) -> Unit = {},
+    ): List<SubtitleTrack> = coroutineScope {
+        val discoveryStartedAtNs = System.nanoTime()
+        val providers = extensions
+            .filter {
+                isExtensionEnabled(
+                    it.descriptor.installationId
+                ) &&
+                    "subtitles" in
+                        it.descriptor.resources && it.descriptor.supportsAddonRequest("subtitles", type, videoId)
+            }
+
+        if (providers.isEmpty()) {
+            onInitialPassComplete()
+            return@coroutineScope emptyList()
+        }
+
+        val mutex = Mutex()
+        val discovered = mutableListOf<SubtitleTrack>()
+        val discoveredUrls = mutableSetOf<String>()
+
+        suspend fun mergeAndPublish(tracks: List<SubtitleTrack>) {
+            val snapshot = mutex.withLock {
+                var changed = false
+                tracks
+                    .filter { com.vueo.shared.core.stremio.StremioUrls.isHttpUrl(it.url) }
+                    .forEach { track ->
+                        if (discoveredUrls.add(track.url)) {
+                            discovered += track
+                            changed = true
+                        }
+                    }
+                discovered.toList().takeIf { changed }
+            }
+            snapshot?.let(onProgress)
+        }
+
+        fun remainingDiscoveryWindowMs(): Long =
+            (
+                SUBTITLE_DISCOVERY_WINDOW_MS -
+                    (System.nanoTime() - discoveryStartedAtNs) / 1_000_000L
+            ).coerceAtLeast(0L)
+
+        suspend fun requestProvider(
+            extension: MediaExtension,
+            attempt: Int,
+            timeoutMs: Long,
+        ): Boolean {
+            val providerName = extension.descriptor.name
+            val startedAtNs = System.nanoTime()
+            onActivity(
+                AddonRequestActivity(
+                    providerName = providerName,
+                    resource = "subtitles",
+                    phase = if (attempt == 1) "started" else "retrying",
+                    attempt = attempt,
+                )
+            )
+            var errorType: String? = null
+            val result = try {
+                withTimeoutOrNull(timeoutMs.coerceAtLeast(1L)) {
+                    extension.subtitles(type, videoId)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                errorType = error::class.java.simpleName
+                emptyList()
+            }
+            val accepted = result
+                ?.let {
+                    filterSubtitleTracksByLanguage(
+                        tracks = it,
+                        allowedLanguageCodes = allowedLanguageCodes,
+                    )
+                }
+                .orEmpty()
+            SubtitleFlowDiagnostics.addonReceived(
+                providerName, result.orEmpty(), accepted, attempt,
+                when {
+                    result == null -> "timeout"
+                    errorType != null -> "failed"
+                    else -> "completed"
+                },
+            )
+            onActivity(
+                AddonRequestActivity(
+                    providerName = providerName,
+                    resource = "subtitles",
+                    phase = when {
+                        result == null -> "timeout"
+                        errorType != null -> "failed"
+                        else -> "completed"
+                    },
+                    resultCount = result?.size ?: 0,
+                    acceptedCount = accepted.size,
+                    elapsedMs =
+                        (System.nanoTime() - startedAtNs) / 1_000_000L,
+                    attempt = attempt,
+                    errorType = errorType,
+                )
+            )
+            if (accepted.isNotEmpty()) {
+                mergeAndPublish(accepted)
+            }
+
+            // Allow one late-result retry for a valid empty response; transient
+            // failures/timeouts retain the existing bounded retry window.
+            return !SubtitleDiscoveryRetryPolicy.shouldRetry(
+                attempt = attempt,
+                successful = errorType == null && result != null,
+                hasResults = !result.isNullOrEmpty(),
+            )
+        }
+
+        var pendingProviders = providers
+            .map { extension ->
+                async {
+                    extension.takeUnless {
+                        requestProvider(
+                            extension = extension,
+                            attempt = 1,
+                            timeoutMs = ADDON_REQUEST_TIMEOUT_MS,
+                        )
+                    }
+                }
+            }
+            .awaitAll()
+            .filterNotNull()
+
+        onInitialPassComplete()
+
+        var attempt = 2
+        while (
+            pendingProviders.isNotEmpty() &&
+            attempt <= SUBTITLE_MAX_ATTEMPTS &&
+            remainingDiscoveryWindowMs() > 0L
+        ) {
+            val remainingBeforeDelay = remainingDiscoveryWindowMs()
+            val delayMs = minOf(
+                SUBTITLE_RETRY_DELAY_MS,
+                (remainingBeforeDelay - 1L).coerceAtLeast(0L),
+            )
+            if (delayMs > 0L) delay(delayMs)
+
+            val remainingForRequest = remainingDiscoveryWindowMs()
+            if (remainingForRequest <= 0L) break
+            val timeoutMs = minOf(
+                SUBTITLE_RETRY_TIMEOUT_MS,
+                remainingForRequest,
+            )
+            pendingProviders = pendingProviders
+                .map { extension ->
+                    async {
+                        extension.takeUnless {
+                            requestProvider(
+                                extension = extension,
+                                attempt = attempt,
+                                timeoutMs = timeoutMs,
+                            )
+                        }
+                    }
+                }
+                .awaitAll()
+                .filterNotNull()
+            attempt += 1
+        }
+
+        mutex.withLock { discovered.toList() }
+    }
+
+    companion object {
+        private const val HOME_CATALOG_LOAD_CONCURRENCY = 4
+
+        private const val ADDON_REQUEST_TIMEOUT_MS =
+            8_000L
+
+        private const val SUBTITLE_RETRY_DELAY_MS =
+            10_000L
+
+        private const val SUBTITLE_RETRY_TIMEOUT_MS =
+            15_000L
+
+        private const val SUBTITLE_DISCOVERY_WINDOW_MS =
+            60_000L
+
+        private const val SUBTITLE_MAX_ATTEMPTS =
+            6
+
+        private const val METADATA_FALLBACK_TIMEOUT_MS =
+            4_000L
+
+        private const val ADDON_STREAM_TIMEOUT_MS =
+            10_000L
+    }
+}
+
+private fun mergeMediaMetadata(
+    current: MediaItem,
+    candidate: MediaItem,
+    sourceExtensionId: String?,
+): MediaItem =
+    current.copy(
+        tmdbId = current.tmdbId ?: candidate.tmdbId.takeIf {
+            (current.type == candidate.type || current.type in setOf("tv", "series") && candidate.type in setOf("tv", "series")) &&
+                (current.id == candidate.id || com.vueo.shared.core.plugin.TmdbResolver.directId(current.id) == candidate.tmdbId)
+        },
+        name = current.name.ifBlank { candidate.name },
+        poster = current.poster ?: candidate.poster,
+        background = current.background ?: candidate.background,
+        description = richerMetadataText(
+            current.description,
+            candidate.description,
+        ),
+        releaseInfo = current.releaseInfo ?: candidate.releaseInfo,
+        originalTitle = current.originalTitle ?: candidate.originalTitle,
+        aliases =
+            (
+                current.aliases +
+                    candidate.aliases +
+                    listOf(current.name, candidate.name) +
+                    listOfNotNull(current.originalTitle, candidate.originalTitle)
+            )
+                .filter(String::isNotBlank)
+                .distinctBy { it.lowercase() },
+        originalLanguage =
+            current.originalLanguage ?: candidate.originalLanguage,
+        countries =
+            (current.countries + candidate.countries)
+                .filter(String::isNotBlank)
+                .distinctBy { it.lowercase() },
+        genres = (current.genres + candidate.genres).distinct(),
+        episodes = mergeMetadataEpisodes(
+            current.episodes,
+            candidate.episodes,
+        ),
+        sourceExtensionId = sourceExtensionId,
+        imdbRating = current.imdbRating ?: candidate.imdbRating,
+        tmdbRating = current.tmdbRating ?: candidate.tmdbRating,
+        runtimeMinutes = current.runtimeMinutes ?: candidate.runtimeMinutes,
+        certification = current.certification ?: candidate.certification,
+        directors = (current.directors + candidate.directors).distinct(),
+        creators = (current.creators + candidate.creators).distinct(),
+        writers = (current.writers + candidate.writers).distinct(),
+        cast = (current.cast + candidate.cast).distinctBy { it.name.lowercase() },
+        productionCompanies =
+            (current.productionCompanies + candidate.productionCompanies)
+                .distinctBy { it.name.lowercase() },
+        networks =
+            (current.networks + candidate.networks)
+                .distinctBy { it.name.lowercase() },
+    )
+
+private fun needsMetadataFallback(item: MediaItem): Boolean {
+    val hasUsableArtwork =
+        !item.poster.isNullOrBlank() ||
+            !item.background.isNullOrBlank()
+
+    if (
+        item.description.isNullOrBlank() ||
+        !hasUsableArtwork
+    ) {
+        return true
+    }
+
+    if (item.type != "series") return false
+
+    // Episode artwork, overview text and pretty titles are enhancement-level
+    // gaps. They must not fan out to every metadata addon and hold up Detail.
+    return item.episodes.isEmpty()
+}
+
+private fun mergeMetadataEpisodes(
+    current: List<EpisodeItem>,
+    candidate: List<EpisodeItem>,
+): List<EpisodeItem> {
+    if (current.isEmpty()) return candidate
+    if (candidate.isEmpty()) return current
+
+    val candidateByPosition =
+        candidate.associateBy { it.season to it.episode }
+    val currentPositions =
+        current.mapTo(mutableSetOf()) { it.season to it.episode }
+
+    return (
+        current.map { episode ->
+            val fallback =
+                candidateByPosition[episode.season to episode.episode]
+                    ?: return@map episode
+
+            episode.copy(
+                title = preferredEpisodeTitle(
+                    current = episode.title,
+                    candidate = fallback.title,
+                    episodeNumber = episode.episode,
+                ),
+                released = episode.released ?: fallback.released,
+                overview = richerMetadataText(
+                    episode.overview,
+                    fallback.overview,
+                ),
+                thumbnail = episode.thumbnail ?: fallback.thumbnail,
+            )
+        } +
+            candidate.filter {
+                (it.season to it.episode) !in currentPositions
+            }
+        )
+        .sortedWith(
+            compareBy<EpisodeItem> { it.season }
+                .thenBy { it.episode }
+        )
+}
+
+private fun preferredEpisodeTitle(
+    current: String,
+    candidate: String,
+    episodeNumber: Int,
+): String {
+    val currentIsGeneric =
+        isGenericEpisodeTitle(current, episodeNumber)
+    val candidateIsGeneric =
+        isGenericEpisodeTitle(candidate, episodeNumber)
+
+    return when {
+        currentIsGeneric && !candidateIsGeneric -> candidate
+        current.isBlank() && candidate.isNotBlank() -> candidate
+        else -> current
+    }
+}
+
+private fun isGenericEpisodeTitle(
+    title: String,
+    episodeNumber: Int,
+): Boolean =
+    title.isBlank() ||
+        Regex(
+            pattern = "^(?:episode|ep|e)\\s*0*$episodeNumber$",
+            option = RegexOption.IGNORE_CASE,
+        ).matches(title.trim())
+
+private fun richerMetadataText(
+    current: String?,
+    candidate: String?,
+): String? =
+    when {
+        current.isNullOrBlank() -> candidate?.takeIf { it.isNotBlank() }
+        candidate.isNullOrBlank() -> current
+        candidate.length > current.length -> candidate
+        else -> current
+    }
+
+data class AddonStreamProgress(
+    val streams: List<StreamSource>,
+    val rawCount: Int,
+    val completedAddons: Int,
+    val totalAddons: Int,
+)
+
+data class AddonRequestActivity(
+    val providerName: String,
+    val resource: String,
+    val phase: String,
+    val resultCount: Int = 0,
+    val acceptedCount: Int? = null,
+    val elapsedMs: Long = 0L,
+    val attempt: Int = 1,
+    val errorType: String? = null,
+)
+
+internal fun filterSubtitleTracksByLanguage(
+    tracks: List<SubtitleTrack>,
+    allowedLanguageCodes: Set<String>?,
+): List<SubtitleTrack> {
+    val allowed = allowedLanguageCodes
+        ?.mapNotNull(LanguagePolicy::canonicalCode)
+        ?.toSet()
+        .orEmpty()
+    if (allowed.isEmpty()) return tracks
+
+    return tracks.filter { track ->
+        LanguagePolicy.canonicalCode(track.language) in allowed
+    }
+}
+
+object SourceRanker {
+    fun comparator(
+        preferredQuality: String? = null,
+        originalLanguage: String? = null,
+    ): Comparator<StreamSource> =
+        compareByDescending<StreamSource> { source ->
+            CoreSourceRanker.assess(
+                source = source.toSourceCandidate(),
+                preferredQuality = preferredQuality,
+                originalLanguage = originalLanguage,
+            ).score
+        }.thenBy {
+            it.sizeBytes ?: Long.MAX_VALUE
+        }.thenBy {
+            it.providerName.lowercase()
+        }
+}
+
+private fun StreamSource.toSourceCandidate(): SourceCandidate =
+    SourceCandidate(
+        id = buildString {
+            append(providerId)
+            append(':')
+            append(url ?: infoHash ?: name)
+            fileIndex?.let {
+                append(':')
+                append(it)
+            }
+        },
+        name = name,
+        url = url,
+        infoHash = infoHash,
+        fileIndex = fileIndex,
+        quality = quality,
+        codec = codec,
+        hdr = hdr,
+        audio = audio,
+        language = language,
+        sizeBytes = sizeBytes,
+        headers = headers,
+        rankBoost = rankBoost,
+        providerId = providerId,
+        providerName = providerName,
+        serverName = serverName,
+        mimeType = mimeType,
+    )
+
+
+object SourceCleaner {
+    fun clean(
+        sources: List<StreamSource>,
+        preferredQuality: String? = null,
+        originalLanguage: String? = null,
+    ): List<StreamSource> {
+        val indexed = linkedMapOf<String, StreamSource>()
+        sources.forEach { source ->
+            val key = SourceSelector.identityKey(source.toSourceCandidate())
+            indexed[key] = indexed[key]
+                ?.let { existing -> mergeDuplicate(existing, source) }
+                ?: source
+        }
+        val unique = indexed.values.toList()
+        return SourceSelector.orderAll(
+            sources = unique.map { it.toSourceCandidate() },
+            preferredQuality = preferredQuality,
+            originalLanguage = originalLanguage,
+        ).mapNotNull { candidate ->
+            indexed[SourceSelector.identityKey(candidate)]
+        }
+    }
+
+    private fun mergeDuplicate(
+        primary: StreamSource,
+        duplicate: StreamSource,
+    ): StreamSource =
+        primary.copy(
+            subtitles = (primary.subtitles + duplicate.subtitles).distinctBy { it.url },
+            infoHash = primary.infoHash?.takeIf { it.isNotBlank() }
+                ?: duplicate.infoHash,
+            fileIndex = primary.fileIndex ?: duplicate.fileIndex,
+            quality = primary.quality?.takeIf { it.isNotBlank() }
+                ?: duplicate.quality,
+            codec = primary.codec?.takeIf { it.isNotBlank() }
+                ?: duplicate.codec,
+            hdr = primary.hdr?.takeIf { it.isNotBlank() }
+                ?: duplicate.hdr,
+            audio = primary.audio?.takeIf { it.isNotBlank() }
+                ?: duplicate.audio,
+            language = primary.language?.takeIf { it.isNotBlank() }
+                ?: duplicate.language,
+            serverName = primary.serverName?.takeIf { it.isNotBlank() }
+                ?: duplicate.serverName,
+            mimeType = primary.mimeType ?: duplicate.mimeType,
+            addonHints = primary.addonHints ?: duplicate.addonHints,
+            sizeBytes = primary.sizeBytes ?: duplicate.sizeBytes,
+            headers = mergeHeaders(primary.headers, duplicate.headers),
+        )
+
+    private fun mergeHeaders(
+        primary: Map<String, String>,
+        duplicate: Map<String, String>,
+    ): Map<String, String> = when {
+        duplicate.isEmpty() -> primary
+        primary.isEmpty() -> duplicate
+        else -> duplicate + primary
+    }
+
+    fun qualityBucket(
+        source: StreamSource,
+    ): String {
+        val value =
+            (
+                source.quality.orEmpty() +
+                " " +
+                source.name
+            ).lowercase()
+
+        return when {
+            "2160" in value ||
+                "4k" in value ||
+                "uhd" in value ->
+                "4K"
+
+            "1080" in value ->
+                "1080p"
+
+            "720" in value ->
+                "720p"
+
+            else ->
+                "Other"
+        }
+    }
+
+    private fun identityKey(
+        source: StreamSource,
+    ): String {
+        val url = source.url
+        val infoHash = source.infoHash
+
+        return when {
+            !url.isNullOrBlank() ->
+                "url:" +
+                    url.trim()
+
+            !infoHash.isNullOrBlank() ->
+                "torrent:" +
+                    infoHash.lowercase() +
+                    ":" +
+                    (
+                        source.fileIndex
+                            ?: -1
+                    )
+
+            else ->
+                listOf(
+                    "fallback",
+                    source.providerId,
+                    source.name,
+                    source.quality,
+                ).joinToString("|")
+        }
+    }
+}

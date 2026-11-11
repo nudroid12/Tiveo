@@ -1,0 +1,40 @@
+# VUEO Account — TV and mobile
+
+Run `migrations/20261012_vueo_sync_v2.sql` in the same Supabase project as the earlier setup. This is additive; existing v1 tables and local app data are retained. Expected SQL result: `VUEO sync v2 setup complete`.
+
+Settings → Account: create/sign in to a VUEO account, then enable the categories wanted on each device. Signup may require email confirmation, depending on Supabase Auth configuration. Sync switches start OFF for a new account on a device. Enabling any category also enables Profiles; disabling Profiles disables all categories.
+
+Included: profiles (name, avatar, kids flag, existing order), Favorites, Continue Watching, history and watched marks, addon manifest URLs, provider repository descriptors, TMDB/MDBList keys and integration settings, and Trakt sessions/options. Profile PINs and active-profile selection remain device-local. Addon/repository/provider enable flags, catalog choices and ordering, subtitle, audio, player preferences, appearance, decoder, cache, downloads and diagnostics are excluded. Existing legacy cloud switches/catalog records are ignored, and legacy outbox entries for those settings are discarded. Provider code is downloaded normally on the destination device; it is not uploaded to Supabase.
+
+Local changes persist first. Foreground polling reads only changes since the last cloud cursor. App sync is deferred during playback and briefly on exit to let player saves finish. Changes arriving during a request enter a later batch. Conflicting stale edits accept the cloud revision; a subsequent explicit edit can change it. Tombstones prevent stale devices restoring removed records. Enable/disable choices apply to this device.
+
+User sessions and the outbox are encrypted with Android Keystore and stored outside Android backup. Cloud record bodies are encrypted with per-account database keys in a private schema, accessed only by authenticated owner-checking RPCs. This is server-side encryption, not end-to-end encryption: the database administrator retains access. No service-role key is bundled.
+
+Trakt access tokens stay local for normal requests. Cloud leases coordinate token refresh and connection changes across devices while Trakt connection sync is enabled. If shared refresh is unavailable, it does not fall back to independently rotating a shared refresh token. Existing Trakt watchlist/history/playback/scrobble controls remain independent from VUEO Sync.
+
+Validation: static source/delimiter checks, SQL access-control review, patch path/integrity checks and a seven-case protocol model (additions, tombstones, re-add, rewind, retry, account isolation and delta cursors). No Android compilation, live SQL execution or device test was performed. Verify signup/login, cross-device changes, removals, offline reconnect and Trakt refresh on devices before treating this as production-validated.
+
+## Email confirmation redirect
+
+In Supabase → Authentication → URL Configuration → Redirect URLs, add exactly `vueo://account/confirmed` and save. Keep email confirmation enabled. The updated signup request sends this explicit redirect URL. Confirming a new email link on a phone with the updated mobile app installed opens Account; sign in normally there. Callback tokens are not imported or logged. Existing confirmation emails keep their old redirect, so this applies to new emails. TV signups can also be confirmed on a phone with the mobile app; return to the TV and sign in normally. No new SQL migration is required for these app changes.
+
+## Category repositories and compact library records
+
+The global JSON journal and full metadata baseline have been replaced. Account sync now stores category delta cursors, per-entity fingerprints/revisions, and a durable per-entity outbox in a device-local SQLite database under `noBackupFilesDir`. Pending entity bodies and token intents are individually AES-GCM encrypted with Android Keystore. Index keys, category names, revisions and fingerprints are local database metadata. A push loads at most 25 changed entities and 750 KB; individual outgoing records are limited to 512 KB. An oversized record fails safely with its original local data retained.
+
+This adopts the Nuvio repository flow: persist local state first, track pending upserts/deletes per item, debounce category pushes, pull paged deltas using category cursors, acknowledge only the sent mutation generation, and preserve local edits arriving during a request. VUEO's existing Supabase RPC/CAS protocol is the transport adapter. SQLite is the Android-specific persistence implementation; this is not a byte-for-byte copy of Nuvio's Kotlin Multiplatform storage or backend. No new SQL migration is required.
+
+Allowlisted preference events identify the affected profile/collection; unrelated categories are not read. Changes are coalesced for 750 ms on IO. Local edits schedule pushes without a cloud pull. Empty deltas and accepted acknowledgements do not reread library collections or reload providers. Remote imports publish separate library, profile, addon and integration notifications once per sync operation, only when values actually changed.
+
+Library entries retain title identity, artwork, description, genre/language/year signals, saved/watched timestamps, episode identity, position, duration and watched/dismissed state. Full episode catalogues, cast and company lists are excluded from each saved/history/sync entry. A compact next-episode index (id, title, season, episode, release) is stored once per title as a device-local cache. Continue Watching title cursors hydrate this index; history does not duplicate it per watched episode. Metadata updates replace the title index without rewriting every history entry. Details still fetch full metadata normally.
+
+Legacy library arrays are parsed incrementally, migrating the local episode index and compacting arrays on their next LibraryStore read under a shared read/write lock. Legacy encrypted account journals are streamed into the new repository, preserving pending tombstones, expected CAS revisions and Trakt token intents. The original journal is deleted only after the migration transaction commits; failed migration keeps it for retry. Cloud bodies from older clients are streamed through the compact decoder, with pulls limited to 25 rows and an 8 MiB response cap. Avoid running an old app build that still writes full metadata alongside the updated build.
+
+On foreground entry, cloud pulls wait 2.5 seconds and use a two-minute freshness window. Foreground periodic pulls run every 15 minutes; manual sync and actual playback exit can pull sooner. A receiving device may take up to the periodic interval to see another device's changes while both remain open. Background entry stops periodic pulls and prevents scheduled automatic requests from starting; an already-running request may finish. Playback deferral and existing device-local options are retained.
+
+Source references used for the rewrite:
+- [NuvioMobile category sync coordinator](https://github.com/NuvioMedia/NuvioMobile/blob/ee3d915067362651e85dd6c959a92f147a77d110/composeApp/src/commonMain/kotlin/com/nuvio/app/core/sync/SyncManager.kt).
+- [NuvioMobile library local state](https://github.com/NuvioMedia/NuvioMobile/blob/ee3d915067362651e85dd6c959a92f147a77d110/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryLocalState.kt).
+- [NuvioMobile stored library payload and pending keys](https://github.com/NuvioMedia/NuvioMobile/blob/ee3d915067362651e85dd6c959a92f147a77d110/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryStoragePayload.kt).
+
+Validation for this rewrite: Kotlin delimiter/source checks, SQLite schema/query/rollback checks, preservation review for playback fields and sync allowlists, and ZIP path/integrity checks. Android compilation, Keystore migration, runtime memory measurements and live cross-device tests were not performed. Verify Favorites add/remove, playback resume/rewind/next episode, offline retry, account switching and legacy journal migration on both TV and mobile.

@@ -1,0 +1,48 @@
+package com.vueo.shared.core.search
+
+import com.vueo.shared.core.media.AnimeMediaPolicy
+import com.vueo.shared.core.media.MediaItem
+import com.vueo.shared.core.media.MediaTypePolicy
+
+object SearchResultOrderPolicy {
+    fun matchesType(
+        item: MediaItem,
+        filter: SearchMediaFilter,
+        animeCatalogKeys: Set<String>,
+    ): Boolean = when (filter) {
+        SearchMediaFilter.ALL -> true
+        SearchMediaFilter.MOVIES -> MediaTypePolicy.isMovie(item.type) && !isAnime(item, animeCatalogKeys)
+        SearchMediaFilter.SERIES -> MediaTypePolicy.isSeries(item.type) && !isAnime(item, animeCatalogKeys)
+        SearchMediaFilter.ANIME -> isAnime(item, animeCatalogKeys)
+    }
+
+    fun matchesGenre(item: MediaItem, genre: String?): Boolean =
+        genre == null || item.genres.any { it.equals(genre, ignoreCase = true) }
+
+    fun isAnime(item: MediaItem, animeCatalogKeys: Set<String>): Boolean =
+        AnimeMediaPolicy.isAnime(item, animeCatalogKeys)
+
+    fun sortActorItems(items: List<MediaItem>, mode: DiscoverSortMode): List<MediaItem> = when (mode) {
+        DiscoverSortMode.POPULAR, DiscoverSortMode.TRENDING -> items
+        DiscoverSortMode.NEWEST -> items.sortedByDescending(SearchPolicy::releaseYear)
+    }
+
+    fun sortTitleItems(items: List<MediaItem>, mode: DiscoverSortMode, query: String? = null): List<MediaItem> {
+        val normalizedQuery = query?.let(SearchPolicy::normalizeText).orEmpty()
+        if (normalizedQuery.isBlank()) {
+            return when (mode) {
+                DiscoverSortMode.POPULAR -> items.sortedByDescending { it.imdbRating ?: it.tmdbRating ?: 0.0 }
+                DiscoverSortMode.TRENDING -> items
+                DiscoverSortMode.NEWEST -> items.sortedByDescending(SearchPolicy::releaseYear)
+            }
+        }
+        val relevance = compareByDescending<MediaItem> { SearchPolicy.relevanceScore(it, normalizedQuery) }
+        return when (mode) {
+            DiscoverSortMode.POPULAR -> items.sortedWith(relevance.thenByDescending { it.imdbRating ?: it.tmdbRating ?: 0.0 }.thenByDescending(SearchPolicy::releaseYear))
+            DiscoverSortMode.TRENDING -> items.sortedWith(relevance.thenByDescending(SearchPolicy::metadataScore))
+            DiscoverSortMode.NEWEST -> items.sortedWith(relevance.thenByDescending(SearchPolicy::releaseYear).thenByDescending { it.imdbRating ?: it.tmdbRating ?: 0.0 })
+        }
+    }
+}
+
+enum class SearchMediaFilter { ALL, MOVIES, SERIES, ANIME }

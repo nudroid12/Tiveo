@@ -1,0 +1,3756 @@
+package com.vueo.shared.core.plugin
+
+import android.app.ActivityManager
+import android.content.Context
+import com.dokar.quickjs.binding.asyncFunction
+import com.dokar.quickjs.binding.define
+import com.dokar.quickjs.binding.function
+import com.dokar.quickjs.evaluate
+import com.dokar.quickjs.quickJs
+import com.vueo.shared.core.diagnostics.ProviderDiagnostics
+import com.vueo.shared.core.diagnostics.RuntimeDiagnostics
+import com.vueo.shared.core.source.SourceCandidate
+import com.vueo.shared.core.source.SourceRequest
+import com.vueo.shared.core.source.SourceResolveResult
+import com.vueo.shared.core.source.SourceResolver
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
+import org.json.JSONObject
+
+class PluginSourceEngine(
+    context: Context,
+    private val store: PluginStore,
+) {
+    private val appContext =
+        context.applicationContext
+
+    private val activityManager =
+        appContext.getSystemService(
+            Context.ACTIVITY_SERVICE
+        ) as? ActivityManager
+
+    private val memoryClassMb =
+        activityManager?.memoryClass
+            ?: DEFAULT_MEMORY_CLASS_MB
+
+    /*
+     * Some devices report ActivityManager.memoryClass above the process'
+     * actual Java heap growth limit. Runtime.maxMemory() is the limit that
+     * matters to QuickJS/OkHttp allocations.
+     */
+    private val heapLimitMb =
+        (
+            Runtime.getRuntime().maxMemory() /
+                (1024L * 1024L)
+        ).toInt()
+
+    private val lowMemoryDevice =
+        activityManager?.isLowRamDevice == true ||
+            memoryClassMb <= LOW_MEMORY_CLASS_MB ||
+            heapLimitMb <= LOW_MEMORY_HEAP_LIMIT_MB
+
+    /*
+     * QuickJS instances are memory-heavy. Five simultaneous providers could
+     * push a 256 MB heap close to OOM. Use a fast-lane queue on low-memory phones: up to three providers may
+     * run, but only one long-running/heavy provider may occupy the queue.
+     * That leaves two slots available for lighter/direct providers so first
+     * results can arrive quickly without allowing several heavy QuickJS/WebView
+     * jobs to spike the heap together.
+     *
+     * Higher-memory devices get four total slots, still below the old five.
+     */
+    private val providerConcurrencyLimit =
+        if (lowMemoryDevice) 3 else 4
+
+    private val webViewConcurrencyLimit =
+        if (lowMemoryDevice) 1 else 2
+
+    private val sourceScanBudgetMs =
+        if (lowMemoryDevice) {
+            LOW_MEMORY_SCAN_BUDGET_MS
+        } else {
+            DEFAULT_SCAN_BUDGET_MS
+        }
+
+    private val concurrency =
+        Semaphore(providerConcurrencyLimit)
+
+    private val webViewConcurrency =
+        Semaphore(webViewConcurrencyLimit)
+
+    private val webViewResolver =
+        PluginWebViewResolver(
+            appContext
+        )
+
+    private val healthStore =
+        PluginHealthStore(
+            appContext
+        )
+
+    private val codeStore =
+        ProviderCodeStore(
+            appContext
+        )
+
+    private val preflight =
+        PluginRuntimePreflight(
+            appContext
+        )
+
+    init {
+        RuntimeDiagnostics.install(appContext)
+    }
+
+suspend fun discover(
+    tmdbId: String,
+    mediaType: String,
+    season: Int?,
+    episode: Int?,
+    mediaTitle: String? = null,
+    mediaOriginalTitle: String? = null,
+    mediaAliases: List<String> = emptyList(),
+    mediaYear: String? = null,
+    mediaExternalId: String? = null,
+    mediaOriginalLanguage: String? = null,
+): PluginDiscoveryResult =
+    discoverProgressive(
+        tmdbId = tmdbId,
+        mediaType = mediaType,
+        season = season,
+        episode = episode,
+        mediaTitle = mediaTitle,
+        mediaOriginalTitle = mediaOriginalTitle,
+        mediaAliases = mediaAliases,
+        mediaYear = mediaYear,
+        mediaExternalId = mediaExternalId,
+        mediaOriginalLanguage = mediaOriginalLanguage,
+        onProgress = {},
+    )
+
+    private fun eligibleDiscoveryTargets(
+        mediaType: String,
+        animeContent: Boolean,
+        providerNameFilter: String?,
+    ): List<Pair<PluginRepositoryDescriptor, PluginProviderDescriptor>> =
+        store.repositories()
+                .filter(store::isRepositoryEnabled)
+                .flatMap { repository ->
+                    repository.providers
+                        .filter { provider ->
+                            store.isProviderEnabled(
+                                repository,
+                                provider,
+                            )
+                        }
+                        .filter { provider ->
+                            provider.supportedTypes
+                                .isEmpty() ||
+                                mediaType.lowercase() in
+                                provider.supportedTypes || (animeContent && provider.supportedTypes.any {
+                                    it.lowercase() in setOf("anime", "animemovie", "anime_movie")
+                                })
+                        }
+                        .filter { provider ->
+                            "android" !in
+                                provider.disabledPlatforms
+                        }
+                        .map { provider ->
+                            repository to provider
+                        }
+                }
+                .filter { (repository, provider) ->
+                    providerNameFilter == null ||
+                        "${repository.name} / ${provider.name}".equals(providerNameFilter, true)
+                }
+
+    fun discoveryProviderKeys(mediaType: String, animeContent: Boolean, providerNameFilter: String?): List<String> {
+        if (!store.pluginsEnabled()) return emptyList()
+        return eligibleDiscoveryTargets(mediaType, animeContent, providerNameFilter)
+            .map { (repository, provider) -> "${repository.name} / ${provider.name}" }.distinct()
+    }
+
+suspend fun discoverProgressive(
+    tmdbId: String,
+    mediaType: String,
+    season: Int?,
+    episode: Int?,
+    mediaTitle: String? = null,
+    mediaOriginalTitle: String? = null,
+    mediaAliases: List<String> = emptyList(),
+    mediaYear: String? = null,
+    mediaExternalId: String? = null,
+    mediaOriginalLanguage: String? = null,
+    forceRefresh: Boolean = false,
+    animeContent: Boolean = false,
+    providerNameFilter: String? = null,
+    onScanBudget: (Long, Long) -> Unit = { _, _ -> },
+    onProviderExecution: (String, Boolean) -> Unit = { _, _ -> },
+    onProgress: suspend (PluginDiscoveryProgress) -> Unit,
+): PluginDiscoveryResult =
+    supervisorScope {
+
+        suspend fun notifyProgress(progress: PluginDiscoveryProgress) {
+            try {
+                onProgress(progress)
+            } catch (error: Exception) {
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                runCatching { com.vueo.shared.core.diagnostics.PerformanceDiagnostics.captureRuntimeEvent(
+                    "DISCOVERY_OBSERVER_ERROR stage=progress type=${error::class.java.simpleName}") }
+            }
+        }
+        suspend fun notifyExecution(provider: String, running: Boolean) {
+            try {
+                onProviderExecution(provider, running)
+            } catch (error: Exception) {
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                runCatching { com.vueo.shared.core.diagnostics.PerformanceDiagnostics.captureRuntimeEvent(
+                    "DISCOVERY_OBSERVER_ERROR stage=execution type=${error::class.java.simpleName}") }
+            }
+        }
+
+        if (!store.pluginsEnabled()) {
+            return@supervisorScope emptyDiscoveryResult()
+        }
+
+        val knownHealth =
+            healthStore.records()
+                .associateBy {
+                    it.repositoryManifestUrl to
+                        it.providerId
+                }
+        val knownHealthSortKeys =
+            knownHealth.mapValues {
+                (_, record) ->
+
+                providerHealthSortKey(
+                    record
+                )
+            }
+        val defaultHealthSortKey =
+            providerHealthSortKey(
+                null
+            )
+
+        val targets = eligibleDiscoveryTargets(mediaType, animeContent, providerNameFilter)
+                .sortedWith(
+                    compareBy<
+                        Pair<
+                            PluginRepositoryDescriptor,
+                            PluginProviderDescriptor
+                        >
+                    > { target -> AdaptiveProviderOrder.tier(animeContent, target.second.supportedTypes, target.second.name + " " + target.second.description.orEmpty()) }
+                    .thenBy { target ->
+                        knownHealthSortKeys[
+                            target.first.manifestUrl to
+                                target.second.id
+                        ]?.availabilityTier
+                            ?: defaultHealthSortKey
+                                .availabilityTier
+                    }.thenByDescending { target ->
+                        knownHealthSortKeys[
+                            target.first.manifestUrl to
+                                target.second.id
+                        ]?.performanceScore
+                            ?: defaultHealthSortKey
+                                .performanceScore
+                    }.thenBy { target ->
+                        knownHealthSortKeys[
+                            target.first.manifestUrl to
+                                target.second.id
+                        ]?.statusTier
+                            ?: defaultHealthSortKey
+                                .statusTier
+                    }.thenBy { target ->
+                        knownHealthSortKeys[
+                            target.first.manifestUrl to
+                                target.second.id
+                        ]?.responseMs
+                            ?: defaultHealthSortKey
+                                .responseMs
+                    }
+                )
+
+        if (targets.isEmpty()) {
+            return@supervisorScope emptyDiscoveryResult()
+        }
+
+        val baseCacheKey =
+            PluginRuntimeCache.key(
+                store = store,
+                tmdbId = tmdbId,
+                mediaType = mediaType,
+                season = season,
+                episode = episode,
+                providerNameFilter = providerNameFilter,
+            )
+
+        // Anime scheduling/targets cannot reuse a non-anime in-flight result.
+        val cacheKey = baseCacheKey + ":anime=$animeContent"
+
+        if (forceRefresh) {
+            PluginRuntimeCache.invalidate(cacheKey)
+        }
+
+        PluginRuntimeCache.get(cacheKey)
+            ?.let { cached ->
+                notifyProgress(
+                    PluginDiscoveryProgress(
+                        result = cached,
+                        completedProviders = targets.size,
+                        totalProviders = targets.size,
+                    )
+                )
+                return@supervisorScope cached
+            }
+
+        val flight =
+            PluginRuntimeCache.acquireFlight(
+                cacheKey
+            )
+
+        if (!flight.owner) {
+            val joined =
+                flight.deferred
+                    .await()
+                    .copy(
+                        coalesced = true
+                    )
+
+            notifyProgress(
+                PluginDiscoveryProgress(
+                    result = joined,
+                    completedProviders = targets.size,
+                    totalProviders = targets.size,
+                )
+            )
+
+            return@supervisorScope joined
+        }
+
+        val runtimeDiagnosticScanId =
+            RuntimeDiagnostics.beginSourceScan(
+                requestLabel = buildString {
+                    append(mediaType.lowercase())
+                    append(" • TMDB ")
+                    append(tmdbId)
+                    if (season != null && episode != null) {
+                        append(" • S")
+                        append(season.toString().padStart(2, '0'))
+                        append(" E")
+                        append(episode.toString().padStart(2, '0'))
+                    }
+                },
+                targetProviders = targets.size,
+            )
+        val runtimeDiagnosticCompletedProviders = java.util.concurrent.atomic.AtomicInteger(0)
+        val discoveryContextBroker =
+            PluginDiscoveryContextBroker(
+                scanId = runtimeDiagnosticScanId,
+                tmdbId = tmdbId,
+                mediaType = mediaType,
+                season = season,
+                episode = episode,
+                seedTitle = mediaTitle,
+                seedOriginalTitle = mediaOriginalTitle,
+                seedAliases = mediaAliases,
+                seedYear = mediaYear,
+                seedExternalId = mediaExternalId,
+                seedOriginalLanguage = mediaOriginalLanguage,
+            )
+
+        RuntimeDiagnostics.recordDiscoveryTrace(
+            scanId = runtimeDiagnosticScanId,
+            stage = "CONTEXT_INIT",
+            details = "tmdb=$tmdbId type=${mediaType.lowercase()} season=${season ?: 0} episode=${episode ?: 0}",
+        )
+
+        try {
+            val initiallyReady = withContext(Dispatchers.IO) {
+                targets.filter { (repository, provider) -> codeStore.isReady(repository, provider) }.toSet()
+            }
+            var preparation = PluginRuntimePreparation(
+                targetProviders = targets.size,
+                alreadyReadyProviders = initiallyReady.size,
+                repairedProviders = 0,
+                failedRepairs = 0,
+                errors = emptyList(),
+            )
+
+            val runs =
+                mutableListOf<ProviderRun>()
+
+            val mutex = Mutex()
+
+            val providerJobs =
+                targets.map {
+                    (repository, provider) ->
+
+                    async {
+                        val providerStartedNs =
+                            System.nanoTime()
+
+                        val run =
+                            try {
+                                if ((repository to provider) !in initiallyReady) {
+                                    val repaired = withContext(Dispatchers.IO) {
+                                        preflight.prepare(listOf(repository to provider))
+                                    }
+                                    mutex.withLock {
+                                        preparation = preparation.copy(
+                                            repairedProviders = preparation.repairedProviders + repaired.repairedProviders,
+                                            failedRepairs = preparation.failedRepairs + repaired.failedRepairs,
+                                            errors = (preparation.errors + repaired.errors).distinct().take(8),
+                                        )
+                                    }
+                                }
+                                val execute: suspend () -> ProviderRun = {
+                                    concurrency.withPermit {
+                                        val executionKey = "${repository.name} / ${provider.name}"
+                                        try {
+                                            notifyExecution(executionKey, true)
+                                            withContext(Dispatchers.Default) {
+                                                val providerDiagnosticToken =
+                                                    RuntimeDiagnostics.beginProvider(
+                                                        scanId = runtimeDiagnosticScanId,
+                                                        providerName = provider.name,
+                                                        providerId = provider.id,
+                                                        pluginName = repository.name,
+                                                    )
+                                                try {
+                                                    runProvider(
+                                                        repository =
+                                                            repository,
+                                                        provider =
+                                                            provider,
+                                                        tmdbId =
+                                                            tmdbId,
+                                                        mediaType =
+                                                            mediaType,
+                                                        season =
+                                                            season,
+                                                        episode =
+                                                            episode,
+                                                        runtimeDiagnosticScanId =
+                                                            runtimeDiagnosticScanId,
+                                                        discoveryContextBroker =
+                                                            discoveryContextBroker,
+                                                    ).also { providerRun ->
+                                                        RuntimeDiagnostics.finishProvider(
+                                                            token = providerDiagnosticToken,
+                                                            status = providerRun.diagnostic.status.name,
+                                                            streamCount = providerRun.diagnostic.streamCount,
+                                                            errorType = providerRun.diagnostic.errorType,
+                                                        )
+                                                    }
+                                                } catch (error: CancellationException) {
+                                                    RuntimeDiagnostics.finishProvider(
+                                                        token = providerDiagnosticToken,
+                                                        status = "CANCELLED",
+                                                        streamCount = 0,
+                                                        errorType = error::class.java.simpleName,
+                                                    )
+                                                    throw error
+                                                } catch (error: Throwable) {
+                                                    RuntimeDiagnostics.finishProvider(
+                                                        token = providerDiagnosticToken,
+                                                        status = "THREW",
+                                                        streamCount = 0,
+                                                        errorType = error::class.java.simpleName,
+                                                    )
+                                                    throw error
+                                                }
+                                            }
+                                        } finally {
+                                            withContext(kotlinx.coroutines.NonCancellable) {
+                                                notifyExecution(executionKey, false)
+                                            }
+                                        }
+                                    }
+                                }
+
+                                /*
+                                 * Keep direct/API phases concurrent. Only the
+                                 * actual WebView resolver is serialized on
+                                 * low-memory devices.
+                                 */
+                                execute()
+                            } catch (error: CancellationException) {
+                                // Caller cancellation or the overall source-scan budget.
+                                throw error
+                            } catch (error: Throwable) {
+                                failedProviderRun(
+                                    repository = repository,
+                                    provider = provider,
+                                    tmdbId = tmdbId,
+                                    mediaType = mediaType,
+                                    season = season,
+                                    episode = episode,
+                                    elapsedMs =
+                                        (
+                                            System.nanoTime() -
+                                                providerStartedNs
+                                        ) / 1_000_000L,
+                                    error = error,
+                                )
+                            }
+
+                        saveHealth(run)
+                        runtimeDiagnosticCompletedProviders.incrementAndGet()
+
+                        val snapshot =
+                            mutex.withLock {
+                                runs += run
+
+                                PluginDiscoveryProgress(
+                                    result =
+                                        buildDiscoveryResult(
+                                            runs
+                                        ).copy(
+                                            readyProviders =
+                                                preparation.alreadyReadyProviders +
+                                                    preparation.repairedProviders,
+                                            repairedProviders =
+                                                preparation.repairedProviders,
+                                            preflightErrors =
+                                                preparation.errors,
+                                        ),
+                                    completedProviders =
+                                        runs.size,
+                                    totalProviders =
+                                        targets.size,
+                                )
+                            }
+
+                        notifyProgress(snapshot)
+                    }
+                }
+
+            runCatching { onScanBudget(android.os.SystemClock.elapsedRealtime(), sourceScanBudgetMs) }
+            val completedWithinBudget =
+                withTimeoutOrNull(
+                    sourceScanBudgetMs
+                ) {
+                    providerJobs.awaitAll()
+                    true
+                } ?: false
+
+            if (!completedWithinBudget) {
+                providerJobs
+                    .filter { it.isActive }
+                    .forEach { job ->
+                        job.cancel(
+                            CancellationException(
+                                "Plugin source scan budget reached"
+                            )
+                        )
+                    }
+
+                /*
+                 * supervisorScope waits for children before returning anyway;
+                 * joining here makes the cancellation point explicit and keeps
+                 * native fetch/WebView cleanup deterministic.
+                 */
+                providerJobs.forEach { job ->
+                    job.join()
+                }
+            }
+
+            runCatching { onScanBudget(0L, 0L) }
+            val result =
+                mutex.withLock {
+                    buildDiscoveryResult(
+                        runs
+                    ).copy(
+                        readyProviders =
+                            preparation.alreadyReadyProviders +
+                                preparation.repairedProviders,
+                        repairedProviders =
+                            preparation.repairedProviders,
+                        preflightErrors =
+                            preparation.errors,
+                    )
+                }
+
+            val cacheableResult =
+                result.streams.isNotEmpty() ||
+                    (
+                        result.diagnostics.isNotEmpty() &&
+                            result.diagnostics.all { diagnostic ->
+                                diagnostic.status == ProviderHealthStatus.NO_RESULTS
+                            }
+                    )
+
+            if (completedWithinBudget && cacheableResult) {
+                PluginRuntimeCache.put(
+                    key = cacheKey,
+                    result = result,
+                )
+            }
+
+            /*
+             * Coalesced callers still receive useful partial results when the
+             * scan budget is reached, but partial runs are not stored in the
+             * normal runtime cache so a later refresh can try remaining
+             * providers.
+             */
+            PluginRuntimeCache.completeFlight(
+                key = cacheKey,
+                result = result,
+            )
+
+            RuntimeDiagnostics.recordDiscoveryTrace(
+                scanId = runtimeDiagnosticScanId,
+                stage = "STREAM_SELECTION",
+                details = "operation=plugin-dedup candidates=${result.diagnostics.sumOf { it.streamCount }} accepted=${result.streams.size} duplicatesRemoved=${(result.diagnostics.sumOf { it.streamCount } - result.streams.size).coerceAtLeast(0)} key=url+infoHash+fileIndex+providerId",
+            )
+            RuntimeDiagnostics.finishSourceScan(
+                scanId = runtimeDiagnosticScanId,
+                streams = result.streams.size,
+                completedProviders = result.attemptedProviders,
+                outcome =
+                    if (completedWithinBudget) {
+                        "complete"
+                    } else {
+                        "budget"
+                    },
+            )
+
+            result
+        } catch (error: Throwable) {
+            RuntimeDiagnostics.failSourceScan(
+                scanId = runtimeDiagnosticScanId,
+                error = error,
+                completedProviders = runtimeDiagnosticCompletedProviders.get(),
+            )
+            PluginRuntimeCache.failFlight(
+                key = cacheKey,
+                error = error,
+            )
+            throw error
+        }
+
+    }
+
+
+private fun failedProviderRun(
+    repository: PluginRepositoryDescriptor,
+    provider: PluginProviderDescriptor,
+    tmdbId: String,
+    mediaType: String,
+    season: Int?,
+    episode: Int?,
+    elapsedMs: Long,
+    error: Throwable,
+): ProviderRun =
+    ProviderRun(
+        streams = emptyList(),
+        diagnostic =
+            ProviderDiagnostic(
+                repositoryManifestUrl =
+                    repository.manifestUrl,
+                repositoryName =
+                    repository.name,
+                providerId =
+                    provider.id,
+                providerName =
+                    provider.name,
+                status =
+                    ProviderHealthStatus.FAILED,
+                responseMs =
+                    elapsedMs.coerceAtLeast(0L),
+                streamCount = 0,
+                requestTmdbId = tmdbId,
+                requestMediaType = mediaType,
+                requestSeason = season,
+                requestEpisode = episode,
+                timeoutMs =
+                    providerRuntimeTimeoutMs(
+                        provider
+                    ),
+                errorType =
+                    error::class.java.simpleName,
+                error =
+                    error.message
+                        ?: error::class.java.simpleName,
+                logs = emptyList(),
+            ),
+    )
+
+
+private fun saveHealth(
+    run: ProviderRun,
+) {
+    healthStore.save(
+        ProviderHealthRecord(
+            repositoryManifestUrl =
+                run.diagnostic
+                    .repositoryManifestUrl,
+            repositoryName =
+                run.diagnostic
+                    .repositoryName,
+            providerId =
+                run.diagnostic
+                    .providerId,
+            providerName =
+                run.diagnostic
+                    .providerName,
+            status =
+                run.diagnostic
+                    .status,
+            responseMs =
+                run.diagnostic
+                    .responseMs,
+            streamCount =
+                run.diagnostic
+                    .streamCount,
+            requestTmdbId = run.diagnostic.requestTmdbId,
+            requestMediaType = run.diagnostic.requestMediaType,
+            requestSeason = run.diagnostic.requestSeason,
+            requestEpisode = run.diagnostic.requestEpisode,
+            timeoutMs = run.diagnostic.timeoutMs,
+            errorType = run.diagnostic.errorType,
+            error =
+                run.diagnostic
+                    .error,
+            logs =
+                run.diagnostic
+                    .logs
+                    .takeLast(
+                        MAX_STORED_LOGS
+                    ),
+            lastCheckedEpochMs =
+                System.currentTimeMillis(),
+        )
+    )
+}
+
+private fun buildDiscoveryResult(
+    runs: List<ProviderRun>,
+): PluginDiscoveryResult {
+    val diagnostics =
+        runs.map {
+            it.diagnostic
+        }
+
+    return PluginDiscoveryResult(
+        streams =
+            runs
+                .flatMap {
+                    it.streams
+                }
+                .distinctBy {
+                    listOf(
+                        it.url,
+                        it.infoHash,
+                        it.fileIndex,
+                        it.providerId,
+                    )
+                },
+        attemptedProviders =
+            runs.size,
+        successfulProviders =
+            diagnostics.count {
+                it.status ==
+                    ProviderHealthStatus
+                        .ONLINE
+            },
+        slowProviders =
+            diagnostics.count {
+                it.status ==
+                    ProviderHealthStatus
+                        .SLOW
+            },
+        noResultProviders =
+            diagnostics.count {
+                it.status ==
+                    ProviderHealthStatus
+                        .NO_RESULTS
+            },
+        needsSetupProviders =
+            diagnostics.count {
+                it.status ==
+                    ProviderHealthStatus
+                        .NEEDS_SETUP
+            },
+        unavailableProviders =
+            diagnostics.count {
+                it.status ==
+                    ProviderHealthStatus
+                        .UNAVAILABLE
+            },
+        blockedProviders =
+            diagnostics.count {
+                it.status ==
+                    ProviderHealthStatus
+                        .BLOCKED
+            },
+        timeoutProviders =
+            diagnostics.count {
+                it.status ==
+                    ProviderHealthStatus
+                        .TIMEOUT
+            },
+        failedProviders =
+            diagnostics.count {
+                it.status ==
+                    ProviderHealthStatus
+                        .FAILED
+            },
+        diagnostics =
+            diagnostics,
+    )
+}
+
+private fun emptyDiscoveryResult():
+    PluginDiscoveryResult =
+    PluginDiscoveryResult(
+        streams = emptyList(),
+        attemptedProviders = 0,
+        successfulProviders = 0,
+        slowProviders = 0,
+        noResultProviders = 0,
+        needsSetupProviders = 0,
+        unavailableProviders = 0,
+        blockedProviders = 0,
+        timeoutProviders = 0,
+        failedProviders = 0,
+        diagnostics = emptyList(),
+    )
+
+    private suspend fun runProvider(
+        repository: PluginRepositoryDescriptor,
+        provider: PluginProviderDescriptor,
+        tmdbId: String,
+        mediaType: String,
+        season: Int?,
+        episode: Int?,
+        runtimeDiagnosticScanId: Long,
+        discoveryContextBroker: PluginDiscoveryContextBroker,
+    ): ProviderRun {
+        val started =
+            System.nanoTime()
+
+        val providerTimeoutMs =
+            providerRuntimeTimeoutMs(provider)
+
+        val progress = ProviderExecutionProgress(diagnosticSink = { message ->
+            if (ProviderDiagnostics.isCollecting()) {
+                ProviderDiagnostics.recordPluginLog(
+                    runtimeDiagnosticScanId, provider.id, provider.name, repository.name, message,
+                )
+            }
+        })
+        ProviderDiagnostics.recordPluginLog(
+            runtimeDiagnosticScanId, provider.id, provider.name, repository.name,
+            "IDENTITY providerVersion=${provider.version} pluginVersion=${repository.version}",
+        )
+        progress.stage("Reading provider code")
+
+        val execution =
+            withTimeoutOrNull(
+                providerTimeoutMs
+            ) {
+                try {
+                    executeProvider(
+                        progress = progress,
+                        repository =
+                            repository,
+                        provider =
+                            provider,
+                        tmdbId =
+                            tmdbId,
+                        mediaType =
+                            mediaType,
+                        season =
+                            season,
+                        episode =
+                            episode,
+                        runtimeDiagnosticScanId =
+                            runtimeDiagnosticScanId,
+                        discoveryContextBroker =
+                            discoveryContextBroker,
+                    )
+                } catch (error: CancellationException) {
+                    // Preserve timeout/caller cancellation so WebView and provider work can stop.
+                    throw error
+                } catch (error: Throwable) {
+                    ProviderExecution(
+                        streams =
+                            emptyList(),
+                        error =
+                            error.message
+                                ?: error::class
+                                    .java
+                                    .simpleName,
+                        errorType = error::class.java.simpleName,
+                        logs =
+                            progress.snapshot(),
+                    )
+                }
+            }
+                ?: ProviderExecution(
+                    streams =
+                        emptyList(),
+                    error =
+                        "Timed out after " +
+                        "${providerTimeoutMs / 1000}s",
+                    errorType = "Timeout",
+                    logs =
+                        progress.snapshot(),
+                )
+
+        val elapsedMs =
+            (
+                System.nanoTime() -
+                started
+            ) / 1_000_000L
+
+        val consoleError =
+            execution.logs
+                .lastOrNull {
+                    it.startsWith(
+                        "ERROR: "
+                    )
+                }
+                ?.removePrefix(
+                    "ERROR: "
+                )
+
+        val error =
+            execution.error
+                ?: consoleError
+
+        if (error != null) progress.diagnostic("ERROR: $error")
+        if (execution.streams.isEmpty()) progress.diagnostic("RESULT: No playable links returned; inspect preceding evidence")
+
+        val status =
+            when {
+                execution.streams
+                    .isNotEmpty() &&
+                    elapsedMs >=
+                    SLOW_THRESHOLD_MS ->
+                    ProviderHealthStatus
+                        .SLOW
+
+                execution.streams
+                    .isNotEmpty() ->
+                    ProviderHealthStatus
+                        .ONLINE
+
+                error != null ->
+                    classifyProviderFailure(
+                        error
+                    )
+
+                else ->
+                    ProviderHealthStatus
+                        .NO_RESULTS
+            }
+
+        val rankBoost =
+            when (status) {
+                ProviderHealthStatus.ONLINE ->
+                    if (elapsedMs < 1_000L) 30 else 22
+
+                ProviderHealthStatus.SLOW ->
+                    8
+
+                else ->
+                    0
+            }
+
+        return ProviderRun(
+            streams =
+                execution.streams.map {
+                    it.copy(
+                        rankBoost =
+                            it.rankBoost +
+                                rankBoost
+                    )
+                },
+            diagnostic =
+                ProviderDiagnostic(
+                    repositoryManifestUrl =
+                        repository.manifestUrl,
+                    repositoryName =
+                        repository.name,
+                    providerId =
+                        provider.id,
+                    providerName =
+                        provider.name,
+                    status =
+                        status,
+                    responseMs =
+                        elapsedMs,
+                    streamCount =
+                        execution.streams.size,
+                    requestTmdbId = tmdbId,
+                    requestMediaType = mediaType,
+                    requestSeason = season,
+                    requestEpisode = episode,
+                    timeoutMs = providerTimeoutMs,
+                    errorType = execution.errorType,
+                    error =
+                        error,
+                    logs =
+                        execution.logs
+                            .takeLast(
+                                MAX_STORED_LOGS
+                            ),
+                ),
+        )
+    }
+
+    private suspend fun executeProvider(
+        repository: PluginRepositoryDescriptor,
+        provider: PluginProviderDescriptor,
+        tmdbId: String,
+        mediaType: String,
+        season: Int?,
+        episode: Int?,
+        runtimeDiagnosticScanId: Long,
+        discoveryContextBroker: PluginDiscoveryContextBroker,
+        progress: ProviderExecutionProgress,
+    ): ProviderExecution {
+        val source =
+            codeStore.read(
+                repository,
+                provider,
+            )
+                ?: return ProviderExecution(
+                    streams =
+                        emptyList(),
+                    error =
+                        "Provider code is not installed locally. " +
+                        "Open Content Manager > Plugins and refresh this repository.",
+                    errorType = "ProviderCodeMissing",
+                    logs =
+                        progress.snapshot(),
+                )
+
+        if (ProviderDiagnostics.isCollecting()) {
+            val hash = java.security.MessageDigest.getInstance("SHA-256").digest(source.toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it.toInt() and 255) }
+            progress.diagnostic("CODE_IDENTITY sha256=$hash scriptChars=${source.length}")
+        }
+        val logs = progress
+        progress.stage("Evaluating provider script")
+
+        val httpTraceCount =
+            java.util.concurrent.atomic.AtomicInteger(0)
+        val webViewTraceCount =
+            java.util.concurrent.atomic.AtomicInteger(0)
+
+        val providerTimeoutMs =
+            providerRuntimeTimeoutMs(provider)
+
+        val executionTasks = ProviderExecutionTasks()
+        val quickJsToken = RuntimeDiagnostics.beginQuickJsExecution(
+            scanId = runtimeDiagnosticScanId,
+            providerName = provider.name,
+            providerId = provider.id,
+            pluginName = repository.name,
+        )
+        return try {
+            val resultJson =
+                quickJs {
+                    RuntimeDiagnostics.recordQuickJsPhase(
+                        token = quickJsToken,
+                        phase = "QJS_CREATE_END",
+                    )
+                    evaluationTimeoutMillis =
+                        providerTimeoutMs
+
+                    define("console") {
+                        function("log") { args ->
+                            logs +=
+                                "LOG: " +
+                                args
+                                    .joinToString(" ")
+                                    .take(
+                                        MAX_LOG_LENGTH
+                                    )
+                        }
+
+                        function("info") { args ->
+                            logs +=
+                                "LOG: " +
+                                args
+                                    .joinToString(" ")
+                                    .take(
+                                        MAX_LOG_LENGTH
+                                    )
+                        }
+
+                        function("warn") { args ->
+                            logs +=
+                                "LOG: " +
+                                args
+                                    .joinToString(" ")
+                                    .take(
+                                        MAX_LOG_LENGTH
+                                    )
+                        }
+
+                        function("error") { args ->
+                            logs +=
+                                "ERROR: " +
+                                args
+                                    .joinToString(" ")
+                                    .take(
+                                        MAX_LOG_LENGTH
+                                    )
+                        }
+                    }
+
+                    asyncFunction<String, String>(
+                        "__vueoDiscoveryContext"
+                    ) { requestJson ->
+                        executionTasks.run {
+                            val requestId = progress.begin("Discovery context")
+                            try {
+                                val response = discoveryContextBroker
+                                    .resolveFromProviderRequest(
+                                        requestJson
+                                    )
+                                progress.finish(requestId, "completed")
+                                response
+                            } catch (error: CancellationException) {
+                                // Preserve deadline cancellation; completed executions remove cancelled work.
+                                if (executionTasks.isFinished) progress.finish(requestId, "cancelled (provider completed)")
+                                throw error
+                            } catch (error: Throwable) {
+                                progress.finish(requestId, "failed (${error::class.java.simpleName})")
+                                throw error
+                            }
+                        } ?: "{\"error\":\"Provider execution completed\"}"
+                    }
+
+                    // Metadata only: scoped to this repository/provider version and bounded in memory.
+                    function<String, String>("vueoMetadataCache") { requestJson ->
+                        ProviderMetadataCache.execute(
+                            namespace = "${repository.manifestUrl}|${provider.id}|${provider.version}",
+                            requestJson = requestJson,
+                        )
+                    }
+
+                    function<String, String>(
+                        "__vueoTrace"
+                    ) { traceJson ->
+                        val trace =
+                            runCatching {
+                                JSONObject(traceJson)
+                            }.getOrNull()
+
+                        progress.stage(trace?.optString("stage")?.takeIf { it.isNotBlank() } ?: "PROVIDER")
+                        RuntimeDiagnostics.recordDiscoveryTrace(
+                            scanId = runtimeDiagnosticScanId,
+                            providerName = provider.name,
+                            providerId = provider.id,
+                            pluginName = repository.name,
+                            stage =
+                                trace
+                                    ?.optString("stage")
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?: "PROVIDER",
+                            details =
+                                trace
+                                    ?.opt("details")
+                                    ?.toString()
+                                    ?: traceJson,
+                        )
+                        "ok"
+                    }
+
+                    asyncFunction<String, String>(
+                        "__vueoNativeFetch"
+                    ) { requestJson ->
+                        executionTasks.run {
+                            val requestId = progress.begin("HTTP " + compactTraceUrl(runCatching { JSONObject(requestJson).optString("url") }.getOrDefault("")))
+                            progress.diagnostic("REQUEST_START requestId=http-$requestId")
+                            val startedNs = System.nanoTime()
+                            try {
+                                val sharedTmdb =
+                                    discoveryContextBroker
+                                        .interceptTmdbFetch(
+                                            requestJson
+                                        )
+                                val responseJson =
+                                    sharedTmdb
+                                        ?: PluginHttp.executeJson(
+                                            requestJson
+                                        )
+                                val traceIndex =
+                                    httpTraceCount.incrementAndGet()
+
+                                if (traceIndex <= MAX_HTTP_TRACE_ENTRIES) {
+                                    RuntimeDiagnostics.recordDiscoveryTrace(
+                                        scanId = runtimeDiagnosticScanId,
+                                        providerName = provider.name,
+                                        providerId = provider.id,
+                                        pluginName = repository.name,
+                                        stage = "HTTP",
+                                        details =
+                                            summarizeHttpTrace(
+                                                requestJson = requestJson,
+                                                requestId = requestId,
+                                                responseJson = responseJson,
+                                                elapsedMs =
+                                                    (
+                                                        System.nanoTime() -
+                                                            startedNs
+                                                    ) / 1_000_000L,
+                                                sharedTmdb =
+                                                    sharedTmdb != null,
+                                            ),
+                                    )
+                                }
+
+                                progress.finish(requestId, "completed")
+                                responseJson
+                            } catch (error: CancellationException) {
+                                // Preserve deadline cancellation; completed executions remove cancelled work.
+                                if (executionTasks.isFinished) progress.finish(requestId, "cancelled (provider completed)")
+                                throw error
+                            } catch (error: Throwable) {
+                                if (httpTraceCount.incrementAndGet() <= MAX_HTTP_TRACE_ENTRIES) {
+                                    RuntimeDiagnostics.recordDiscoveryTrace(
+                                        scanId = runtimeDiagnosticScanId, providerName = provider.name,
+                                        providerId = provider.id, pluginName = repository.name, stage = "HTTP",
+                                        details = summarizeHttpTrace(
+                                            requestJson, requestId,
+                                            JSONObject().put("status", 0).put("error", error::class.java.simpleName).toString(),
+                                            (System.nanoTime() - startedNs) / 1_000_000L, false,
+                                        ),
+                                    )
+                                }
+                                progress.finish(requestId, "failed (${error::class.java.simpleName})")
+                                throw error
+                            }
+                        } ?: "{\"error\":\"Provider execution completed\"}"
+                    }
+
+                    asyncFunction<String, String>(
+                        "__vueoWebViewResolve"
+                    ) { requestJson ->
+                        executionTasks.run {
+                            val requestId = progress.begin("WebView " + compactTraceUrl(runCatching { JSONObject(requestJson).optString("url") }.getOrDefault("")))
+                            try {
+                                val startedNs =
+                                    System.nanoTime()
+                                val responseJson =
+                                    webViewConcurrency.withPermit {
+                                        progress.stage("Resolving WebView (slot acquired)")
+                                        webViewResolver.resolveJson(
+                                            requestJson
+                                        )
+                                    }
+                                val traceIndex =
+                                    webViewTraceCount.incrementAndGet()
+
+                                if (traceIndex <= MAX_WEBVIEW_TRACE_ENTRIES) {
+                                    RuntimeDiagnostics.recordDiscoveryTrace(
+                                        scanId = runtimeDiagnosticScanId,
+                                        providerName = provider.name,
+                                        providerId = provider.id,
+                                        pluginName = repository.name,
+                                        stage = "WEBVIEW",
+                                        details =
+                                            summarizeWebViewTrace(
+                                                requestJson = requestJson,
+                                                responseJson = responseJson,
+                                                elapsedMs =
+                                                    (
+                                                        System.nanoTime() -
+                                                            startedNs
+                                                    ) / 1_000_000L,
+                                            ),
+                                    )
+                                }
+
+                                progress.finish(requestId, "completed")
+                                responseJson
+                            } catch (error: CancellationException) {
+                                // Preserve deadline cancellation; completed executions remove cancelled work.
+                                if (executionTasks.isFinished) progress.finish(requestId, "cancelled (provider completed)")
+                                throw error
+                            } catch (error: Throwable) {
+                                progress.finish(requestId, "failed (${error::class.java.simpleName})")
+                                throw error
+                            }
+                        } ?: "{\"error\":\"Provider execution completed\"}"
+                    }
+
+                    val htmlBridge =
+                        HtmlCompatBridge()
+
+                    function<String, String>(
+                        "__vueoHtmlOp"
+                    ) { requestJson ->
+                        progress.stage("HTML " + runCatching { JSONObject(requestJson).optString("op") }.getOrDefault("operation"))
+                        htmlBridge.execute(
+                            requestJson
+                        )
+                    }
+
+                    function<String, String>(
+                        "__vueoCryptoOp"
+                    ) { requestJson ->
+                        CryptoCompatBridge.execute(
+                            requestJson
+                        )
+                    }
+
+                    function<String, String>(
+                        "__vueoUrlOp"
+                    ) { requestJson ->
+                        UrlCompatBridge.execute(
+                            requestJson
+                        )
+                    }
+
+                    function<String, String>("__vueoBase64") { value ->
+                        BinaryCompatBridge.encodeUtf8(value)
+                    }
+                    function<String, String>("__vueoBase64Decode") { value ->
+                        BinaryCompatBridge.decodeUtf8(value)
+                    }
+                    function<String, String>("__vueoBinaryToBase64") { value ->
+                        BinaryCompatBridge.encodeBinary(value)
+                    }
+                    function<String, String>("__vueoBase64ToBinary") { value ->
+                        BinaryCompatBridge.decodeBinary(value)
+                    }
+
+                    function<String, Boolean>("__vueoFinishExecution") { _ ->
+                        executionTasks.finish()
+                        true
+                    }
+                    function<String, Boolean>("__vueoCancelTimer") { timerId ->
+                        executionTasks.cancelTimer(timerId)
+                        true
+                    }
+                    asyncFunction<String, Boolean>("__vueoTimerDelay") { timerJson ->
+                        val timer = JSONObject(timerJson)
+                        executionTasks.run(timer.optString("id")) {
+                            delay(timer.optLong("millis").coerceIn(0L, 30_000L))
+                            true
+                        } ?: false
+                    }
+
+                    RuntimeDiagnostics.recordQuickJsPhase(
+                        token = quickJsToken,
+                        phase = "QJS_EVAL_BEGIN",
+                        details = "scriptChars=${source.length} timeoutMs=$providerTimeoutMs",
+                    )
+                    val evaluationResult = evaluate<String>(
+                        buildRuntimeScript(
+                            providerScript =
+                                source,
+                            tmdbId =
+                                tmdbId,
+                            mediaType =
+                                mediaType,
+                            season =
+                                season,
+                            episode =
+                                episode,
+                        ),
+                        filename =
+                            "${provider.id}.js",
+                    )
+                    RuntimeDiagnostics.recordQuickJsPhase(
+                        token = quickJsToken,
+                        phase = "QJS_EVAL_END",
+                        details = "resultChars=${evaluationResult.length}",
+                    )
+                    evaluationResult
+                }
+
+            RuntimeDiagnostics.recordQuickJsPhase(
+                token = quickJsToken,
+                phase = "QJS_CLOSE",
+            )
+            progress.stage("Parsing provider results")
+            RuntimeDiagnostics.recordQuickJsPhase(
+                token = quickJsToken,
+                phase = "RESULT_PARSE_BEGIN",
+                details = "resultChars=${resultJson.length}",
+            )
+            val streams = parseProviderStreams(
+                repository, provider, resultJson,
+                onDiagnostic = if (ProviderDiagnostics.isCollecting()) {
+                    { evidence -> progress.diagnostic("PARSE: $evidence") }
+                } else null,
+            )
+            RuntimeDiagnostics.recordQuickJsPhase(
+                token = quickJsToken,
+                phase = "RESULT_PARSE_END",
+                details = "streams=${streams.size}",
+            )
+            progress.stage("Provider finished: ${streams.size} sources")
+            ProviderExecution(
+                streams =
+                    streams,
+                error =
+                    null,
+                logs =
+                    progress.snapshot(),
+            )
+        } catch (error: CancellationException) {
+            RuntimeDiagnostics.recordQuickJsPhase(
+                token = quickJsToken,
+                phase = if (error is TimeoutCancellationException) "QJS_TIMEOUT" else "QJS_CANCELLED",
+                details = "type=${error::class.java.simpleName}",
+                critical = false,
+            )
+            throw error
+        } catch (error: Throwable) {
+            RuntimeDiagnostics.recordQuickJsPhase(
+                token = quickJsToken,
+                phase = "QJS_ABORT",
+                details = "type=${error::class.java.simpleName} message=${error.message.orEmpty().take(120)}",
+            )
+            ProviderExecution(
+                streams =
+                    emptyList(),
+                error =
+                    buildString {
+                        append(
+                            error.message
+                                ?: error::class
+                                    .java
+                                    .simpleName
+                        )
+                    },
+                errorType = error::class.java.simpleName,
+                logs =
+                    progress.snapshot(),
+            )
+        }
+    }
+
+    private fun buildRuntimeScript(
+        providerScript: String,
+        tmdbId: String,
+        mediaType: String,
+        season: Int?,
+        episode: Int?,
+    ): String {
+        val safeTmdbId =
+            JSONObject.quote(
+                tmdbId
+            )
+
+        val safeMediaType =
+            JSONObject.quote(
+                mediaType
+            )
+
+        val seasonValue =
+            season?.toString()
+                ?: "null"
+
+        val episodeValue =
+            episode?.toString()
+                ?: "null"
+
+        return """
+            globalThis.window = globalThis;
+            globalThis.global = globalThis;
+            globalThis.self = globalThis;
+            globalThis.process = globalThis.process || { env: {} };
+            globalThis.SCRAPER_SETTINGS =
+              globalThis.SCRAPER_SETTINGS || {};
+            globalThis.VUEO_DISCOVERY_CONTEXT = {
+              version: 3,
+              tmdbId: ${safeTmdbId},
+              mediaType: ${safeMediaType},
+              season: ${seasonValue},
+              episode: ${episodeValue},
+              title: "",
+              originalTitle: "",
+              year: "",
+              imdbId: "",
+              externalId: "",
+              originalLanguage: "",
+              aliases: []
+            };
+
+            globalThis.vueoDiscoveryContext =
+              async function (tmdbUrl) {
+                var raw = await __vueoDiscoveryContext(
+                  JSON.stringify({
+                    url: String(tmdbUrl || "")
+                  })
+                );
+                if (__vueoExecutionFinished) return new Promise(function () {});
+                var context = JSON.parse(raw);
+                if (context && context.error) {
+                  throw new Error(context.error);
+                }
+                if (context && typeof context === "object") {
+                  globalThis.VUEO_DISCOVERY_CONTEXT = context;
+                }
+                return context;
+              };
+
+            globalThis.vueoTrace =
+              function (stage, details) {
+                try {
+                  __vueoTrace(
+                    JSON.stringify({
+                      stage: String(stage || "PROVIDER"),
+                      details:
+                        details == null
+                          ? ""
+                          : details
+                    })
+                  );
+                } catch (_) {}
+              };
+
+            function __vueoString(value) {
+              try {
+                if (typeof value === "string") return value;
+                return JSON.stringify(value);
+              } catch (_) {
+                return String(value);
+              }
+            }
+
+            function __vueoHeaders(raw) {
+              var normalized = {};
+              if (raw && typeof raw === "object") {
+                Object.keys(raw).forEach(function (key) {
+                  normalized[String(key)] = String(raw[key]);
+                });
+              }
+              return normalized;
+            }
+
+            globalThis.webviewResolve = async function (input, options) {
+              options = options || {};
+
+              var request = {};
+              if (input && typeof input === "object") {
+                Object.keys(input).forEach(function (key) {
+                  request[key] = input[key];
+                });
+              } else {
+                request.url = String(input || "");
+              }
+
+              Object.keys(options).forEach(function (key) {
+                request[key] = options[key];
+              });
+
+              var raw = await __vueoWebViewResolve(
+                JSON.stringify(request)
+              );
+              if (__vueoExecutionFinished) return new Promise(function () {});
+              var result = JSON.parse(raw);
+
+              if (result.error) {
+                throw new Error(result.error);
+              }
+
+              return result;
+            };
+
+            globalThis.webViewResolve =
+              globalThis.webviewResolve;
+
+            globalThis.fetch = async function (input, init) {
+              init = init || {};
+
+              var request = {
+                url: String(input && input.url ? input.url : input),
+                method: String(init.method || "GET").toUpperCase(),
+                headers: __vueoHeaders(init.headers),
+                body: init.body == null ? null : String(init.body),
+                contentType:
+                  init.headers &&
+                  (init.headers["Content-Type"] || init.headers["content-type"])
+                    ? String(
+                        init.headers["Content-Type"] ||
+                        init.headers["content-type"]
+                      )
+                    : null,
+                redirect:
+                  init.redirect == null
+                    ? "follow"
+                    : String(init.redirect)
+              };
+
+              var raw = await __vueoNativeFetch(
+                JSON.stringify(request)
+              );
+
+              if (__vueoExecutionFinished) return new Promise(function () {});
+              var response = JSON.parse(raw);
+
+              if (response.error) {
+                throw new Error(response.error);
+              }
+
+              var responseHeaders = response.headers || {};
+              var bodyText = response.body || "";
+
+              return {
+                ok:
+                  response.status >= 200 &&
+                  response.status < 300,
+                status: response.status || 0,
+                statusText: response.statusText || "",
+                url: response.url || request.url,
+                headers: {
+                  get: function (name) {
+                    if (!name) return null;
+                    var lower = String(name).toLowerCase();
+                    var keys = Object.keys(responseHeaders);
+                    for (var i = 0; i < keys.length; i++) {
+                      if (keys[i].toLowerCase() === lower) {
+                        return String(responseHeaders[keys[i]]);
+                      }
+                    }
+                    return null;
+                  },
+                  has: function (name) {
+                    return this.get(name) !== null;
+                  }
+                },
+                text: async function () {
+                  return bodyText;
+                },
+                json: async function () {
+                  return JSON.parse(bodyText || "null");
+                },
+                clone: function () {
+                  return this;
+                }
+              };
+            };
+
+            function __vueoAxiosRequest(config) {
+              config = config || {};
+
+              return fetch(config.url, {
+                method: config.method || "GET",
+                headers: config.headers || {},
+                body:
+                  config.data == null
+                    ? null
+                    : (
+                        typeof config.data === "string"
+                          ? config.data
+                          : JSON.stringify(config.data)
+                      )
+              }).then(async function (response) {
+                var text = await response.text();
+                var data = text;
+
+                try {
+                  data = JSON.parse(text);
+                } catch (_) {}
+
+                if (!response.ok) {
+                  var error =
+                    new Error(
+                      "Request failed with status " +
+                      response.status
+                    );
+
+                  error.response = {
+                    data: data,
+                    status: response.status,
+                    statusText: response.statusText,
+                    headers: response.headers,
+                    config: config
+                  };
+
+                  throw error;
+                }
+
+                return {
+                  data: data,
+                  status: response.status,
+                  statusText: response.statusText,
+                  headers: response.headers,
+                  config: config
+                };
+              });
+            }
+
+            var __vueoAxiosModule = function (config) {
+              return __vueoAxiosRequest(config);
+            };
+
+            __vueoAxiosModule.request = __vueoAxiosRequest;
+
+            __vueoAxiosModule.get = function (url, config) {
+              config = config || {};
+              config.url = url;
+              config.method = "GET";
+              return __vueoAxiosRequest(config);
+            };
+
+            __vueoAxiosModule.post = function (url, data, config) {
+              config = config || {};
+              config.url = url;
+              config.method = "POST";
+              config.data = data;
+              return __vueoAxiosRequest(config);
+            };
+
+            globalThis.axios = __vueoAxiosModule;
+
+            globalThis.btoa = function (value) {
+              return __vueoBinaryToBase64(
+                JSON.stringify(String(value))
+              );
+            };
+
+            globalThis.atob = function (value) {
+              return JSON.parse(__vueoBase64ToBinary(
+                String(value)
+              ));
+            };
+
+            globalThis.Buffer = globalThis.Buffer || {
+              from: function (value) {
+                var text = String(value);
+
+                return {
+                  toString: function (encoding) {
+                    if (encoding === "base64") {
+                      return __vueoBase64(JSON.stringify(text));
+                    }
+                    return text;
+                  }
+                };
+              }
+            };
+
+            ${PROVIDER_TIMER_SCRIPT}
+
+            function __vueoNativeUrl(input, base) {
+                          var raw = __vueoUrlOp(
+                            JSON.stringify({
+                              input: String(input),
+                              base:
+                                base == null
+                                  ? ""
+                                  : String(
+                                      base.href ||
+                                      base
+                                    )
+                            })
+                          );
+
+                          var parsed = JSON.parse(raw);
+
+                          if (parsed.error) {
+                            throw new TypeError(parsed.error);
+                          }
+
+                          return parsed;
+                        }
+
+                        globalThis.URLSearchParams =
+                          function (initial) {
+                            this._pairs = [];
+
+                            if (
+                              initial &&
+                              initial._pairs &&
+                              Array.isArray(initial._pairs)
+                            ) {
+                              this._pairs =
+                                initial._pairs.map(
+                                  function (pair) {
+                                    return [
+                                      String(pair[0]),
+                                      String(pair[1])
+                                    ];
+                                  }
+                                );
+                              return;
+                            }
+
+                            if (Array.isArray(initial)) {
+                              for (
+                                var ai = 0;
+                                ai < initial.length;
+                                ai++
+                              ) {
+                                if (
+                                  initial[ai] &&
+                                  initial[ai].length >= 2
+                                ) {
+                                  this.append(
+                                    initial[ai][0],
+                                    initial[ai][1]
+                                  );
+                                }
+                              }
+                              return;
+                            }
+
+                            if (typeof initial === "string") {
+                              var source =
+                                initial.charAt(0) === "?"
+                                  ? initial.slice(1)
+                                  : initial;
+
+                              if (source) {
+                                var parts = source.split("&");
+
+                                for (
+                                  var i = 0;
+                                  i < parts.length;
+                                  i++
+                                ) {
+                                  if (!parts[i]) continue;
+
+                                  var eq =
+                                    parts[i].indexOf("=");
+
+                                  var rawKey =
+                                    eq >= 0
+                                      ? parts[i].slice(0, eq)
+                                      : parts[i];
+
+                                  var rawValue =
+                                    eq >= 0
+                                      ? parts[i].slice(eq + 1)
+                                      : "";
+
+                                  this.append(
+                                    decodeURIComponent(
+                                      rawKey.replace(/\+/g, " ")
+                                    ),
+                                    decodeURIComponent(
+                                      rawValue.replace(/\+/g, " ")
+                                    )
+                                  );
+                                }
+                              }
+                              return;
+                            }
+
+                            if (
+                              initial &&
+                              typeof initial === "object"
+                            ) {
+                              var keys =
+                                Object.keys(initial);
+
+                              for (
+                                var j = 0;
+                                j < keys.length;
+                                j++
+                              ) {
+                                this.append(
+                                  keys[j],
+                                  initial[keys[j]]
+                                );
+                              }
+                            }
+                          };
+
+                        URLSearchParams.prototype.append =
+                          function (key, value) {
+                            this._pairs.push([
+                              String(key),
+                              String(value)
+                            ]);
+                          };
+
+                        URLSearchParams.prototype.set =
+                          function (key, value) {
+                            this.delete(key);
+                            this.append(key, value);
+                          };
+
+                        URLSearchParams.prototype.get =
+                          function (key) {
+                            key = String(key);
+
+                            for (
+                              var i = 0;
+                              i < this._pairs.length;
+                              i++
+                            ) {
+                              if (
+                                this._pairs[i][0] === key
+                              ) {
+                                return this._pairs[i][1];
+                              }
+                            }
+
+                            return null;
+                          };
+
+                        URLSearchParams.prototype.getAll =
+                          function (key) {
+                            key = String(key);
+
+                            return this._pairs
+                              .filter(function (pair) {
+                                return pair[0] === key;
+                              })
+                              .map(function (pair) {
+                                return pair[1];
+                              });
+                          };
+
+                        URLSearchParams.prototype.has =
+                          function (key) {
+                            return this.get(key) !== null;
+                          };
+
+                        URLSearchParams.prototype.delete =
+                          function (key) {
+                            key = String(key);
+
+                            this._pairs =
+                              this._pairs.filter(
+                                function (pair) {
+                                  return pair[0] !== key;
+                                }
+                              );
+                          };
+
+                        URLSearchParams.prototype.keys =
+                          function () {
+                            return this._pairs
+                              .map(function (pair) {
+                                return pair[0];
+                              })
+                              [Symbol.iterator]();
+                          };
+
+                        URLSearchParams.prototype.values =
+                          function () {
+                            return this._pairs
+                              .map(function (pair) {
+                                return pair[1];
+                              })
+                              [Symbol.iterator]();
+                          };
+
+                        URLSearchParams.prototype.entries =
+                          function () {
+                            return this._pairs
+                              .map(function (pair) {
+                                return [
+                                  pair[0],
+                                  pair[1]
+                                ];
+                              })
+                              [Symbol.iterator]();
+                          };
+
+                        URLSearchParams.prototype.forEach =
+                          function (callback, thisArg) {
+                            for (
+                              var i = 0;
+                              i < this._pairs.length;
+                              i++
+                            ) {
+                              callback.call(
+                                thisArg,
+                                this._pairs[i][1],
+                                this._pairs[i][0],
+                                this
+                              );
+                            }
+                          };
+
+                        URLSearchParams.prototype.toString =
+                          function () {
+                            return this._pairs
+                              .map(function (pair) {
+                                return (
+                                  encodeURIComponent(pair[0])
+                                    .replace(/%20/g, "+") +
+                                  "=" +
+                                  encodeURIComponent(pair[1])
+                                    .replace(/%20/g, "+")
+                                );
+                              })
+                              .join("&");
+                          };
+
+                        if (
+                          typeof Symbol !== "undefined" &&
+                          Symbol.iterator
+                        ) {
+                          URLSearchParams.prototype[
+                            Symbol.iterator
+                          ] =
+                            URLSearchParams.prototype.entries;
+                        }
+
+                        globalThis.URL =
+                          function (input, base) {
+                            var parsed =
+                              __vueoNativeUrl(
+                                input,
+                                base
+                              );
+
+                            this.href = parsed.href;
+                            this.origin = parsed.origin;
+                            this.protocol = parsed.protocol;
+                            this.hostname = parsed.hostname;
+                            this.host = parsed.host;
+                            this.port = parsed.port;
+                            this.pathname = parsed.pathname;
+                            this.search = parsed.search;
+                            this.hash = parsed.hash;
+                            this.searchParams =
+                              new URLSearchParams(
+                                parsed.queryPairs || []
+                              );
+                          };
+
+                        URL.prototype.toString =
+                          function () {
+                            return this.href;
+                          };
+
+                        URL.prototype.toJSON =
+                          function () {
+                            return this.href;
+                          };
+
+                        globalThis.AbortSignal =
+                          globalThis.AbortSignal ||
+                          {
+                            timeout: function (millis) {
+                              return {
+                                __vueoTimeoutMs:
+                                  Number(millis || 0),
+                                aborted: false
+                              };
+                            }
+                          };
+
+                        function __vueoUtf8Bytes(value) {
+                          var text = String(value);
+                          var encoded =
+                            unescape(
+                              encodeURIComponent(text)
+                            );
+
+                          var bytes = [];
+
+                          for (
+                            var i = 0;
+                            i < encoded.length;
+                            i++
+                          ) {
+                            bytes.push(
+                              encoded.charCodeAt(i) & 255
+                            );
+                          }
+
+                          return bytes;
+                        }
+
+                        function __vueoUtf8String(bytes) {
+                          var binary = "";
+
+                          for (
+                            var i = 0;
+                            i < bytes.length;
+                            i++
+                          ) {
+                            binary +=
+                              String.fromCharCode(
+                                bytes[i] & 255
+                              );
+                          }
+
+                          try {
+                            return decodeURIComponent(
+                              escape(binary)
+                            );
+                          } catch (_) {
+                            return binary;
+                          }
+                        }
+
+                        globalThis.TextEncoder =
+                          globalThis.TextEncoder ||
+                          function () {};
+
+                        TextEncoder.prototype.encode =
+                          function (value) {
+                            return new Uint8Array(
+                              __vueoUtf8Bytes(value)
+                            );
+                          };
+
+                        globalThis.TextDecoder =
+                          globalThis.TextDecoder ||
+                          function () {};
+
+                        TextDecoder.prototype.decode =
+                          function (value) {
+                            if (value == null) {
+                              return "";
+                            }
+
+                            return __vueoUtf8String(
+                              Array.prototype.slice.call(
+                                value
+                              )
+                            );
+                          };
+
+                        function __vueoB64ToBytes(value) {
+                          var binary =
+                            atob(String(value));
+
+                          var bytes = [];
+
+                          for (
+                            var i = 0;
+                            i < binary.length;
+                            i++
+                          ) {
+                            bytes.push(
+                              binary.charCodeAt(i) & 255
+                            );
+                          }
+
+                          return bytes;
+                        }
+
+                        function __vueoBytesToB64(bytes) {
+                          var binary = "";
+
+                          for (
+                            var i = 0;
+                            i < bytes.length;
+                            i++
+                          ) {
+                            binary +=
+                              String.fromCharCode(
+                                bytes[i] & 255
+                              );
+                          }
+
+                          return btoa(binary);
+                        }
+
+                        function __vueoWordsToBytes(
+                          words,
+                          sigBytes
+                        ) {
+                          words = words || [];
+
+                          var count =
+                            sigBytes == null
+                              ? words.length * 4
+                              : Number(sigBytes);
+
+                          var bytes = [];
+
+                          for (
+                            var i = 0;
+                            i < count;
+                            i++
+                          ) {
+                            bytes.push(
+                              (
+                                words[i >>> 2] >>>
+                                (
+                                  24 -
+                                  (i % 4) * 8
+                                )
+                              ) & 255
+                            );
+                          }
+
+                          return bytes;
+                        }
+
+                        function __vueoBytesToWords(bytes) {
+                          var words = [];
+
+                          for (
+                            var i = 0;
+                            i < bytes.length;
+                            i++
+                          ) {
+                            words[i >>> 2] =
+                              (
+                                words[i >>> 2] || 0
+                              ) |
+                              (
+                                (bytes[i] & 255) <<
+                                (
+                                  24 -
+                                  (i % 4) * 8
+                                )
+                              );
+                          }
+
+                          return words;
+                        }
+
+                        function VueoWordArray(
+                          bytes
+                        ) {
+                          this._bytes =
+                            (bytes || []).slice();
+
+                          this.sigBytes =
+                            this._bytes.length;
+
+                          this.words =
+                            __vueoBytesToWords(
+                              this._bytes
+                            );
+                        }
+
+                        VueoWordArray.prototype.concat =
+                          function (other) {
+                            var incoming =
+                              __vueoAsWordArray(
+                                other
+                              );
+
+                            this._bytes =
+                              this._bytes.concat(
+                                incoming._bytes
+                              );
+
+                            this.sigBytes =
+                              this._bytes.length;
+
+                            this.words =
+                              __vueoBytesToWords(
+                                this._bytes
+                              );
+
+                            return this;
+                          };
+
+                        VueoWordArray.prototype.clamp =
+                          function () {
+                            return this;
+                          };
+
+                        VueoWordArray.prototype.clone =
+                          function () {
+                            return new VueoWordArray(
+                              this._bytes
+                            );
+                          };
+
+                        VueoWordArray.prototype.toString =
+                          function (encoder) {
+                            return (
+                              encoder ||
+                              __vueoCryptoJsModule.enc.Hex
+                            ).stringify(this);
+                          };
+
+                        function __vueoAsWordArray(
+                          value
+                        ) {
+                          if (
+                            value instanceof
+                            VueoWordArray
+                          ) {
+                            return value;
+                          }
+
+                          if (
+                            value &&
+                            Array.isArray(value._bytes)
+                          ) {
+                            return new VueoWordArray(
+                              value._bytes
+                            );
+                          }
+
+                          if (
+                            value &&
+                            Array.isArray(value.words)
+                          ) {
+                            return new VueoWordArray(
+                              __vueoWordsToBytes(
+                                value.words,
+                                value.sigBytes
+                              )
+                            );
+                          }
+
+                          if (
+                            value instanceof Uint8Array
+                          ) {
+                            return new VueoWordArray(
+                              Array.prototype.slice.call(
+                                value
+                              )
+                            );
+                          }
+
+                          if (
+                            value instanceof ArrayBuffer
+                          ) {
+                            return new VueoWordArray(
+                              Array.prototype.slice.call(
+                                new Uint8Array(value)
+                              )
+                            );
+                          }
+
+                          return new VueoWordArray(
+                            __vueoUtf8Bytes(
+                              String(value)
+                            )
+                          );
+                        }
+
+                        function __vueoCryptoNative(
+                          request
+                        ) {
+                          var raw =
+                            __vueoCryptoOp(
+                              JSON.stringify(request)
+                            );
+
+                          var parsed =
+                            JSON.parse(raw);
+
+                          if (parsed.error) {
+                            throw new Error(
+                              parsed.error
+                            );
+                          }
+
+                          return parsed;
+                        }
+
+                        globalThis.__crypto_aes_decrypt_raw =
+                          function (
+                            mode,
+                            keyArg,
+                            ivArg,
+                            dataArg
+                          ) {
+                            function bytesOf(value) {
+                              if (!value) {
+                                return [];
+                              }
+
+                              return Array.prototype
+                                .slice.call(value)
+                                .map(
+                                  function (byte) {
+                                    return (
+                                      Number(byte) & 255
+                                    );
+                                  }
+                                );
+                            }
+
+                            var result =
+                              __vueoCryptoNative({
+                                op: "decrypt",
+                                algorithm: "AES",
+                                data:
+                                  __vueoBytesToB64(
+                                    bytesOf(dataArg)
+                                  ),
+                                key:
+                                  __vueoBytesToB64(
+                                    bytesOf(keyArg)
+                                  ),
+                                iv:
+                                  __vueoBytesToB64(
+                                    bytesOf(ivArg)
+                                  )
+                              });
+
+                            return new Uint8Array(
+                              __vueoB64ToBytes(
+                                result.data
+                              )
+                            );
+                          };
+
+                        function __vueoCryptoHash(
+                          algorithm,
+                          input
+                        ) {
+                          var wordArray =
+                            __vueoAsWordArray(
+                              input
+                            );
+
+                          var result =
+                            __vueoCryptoNative({
+                              op: "hash",
+                              algorithm: algorithm,
+                              data:
+                                __vueoBytesToB64(
+                                  wordArray._bytes
+                                )
+                            });
+
+                          return new VueoWordArray(
+                            __vueoB64ToBytes(
+                              result.data
+                            )
+                          );
+                        }
+
+                        function __vueoCryptoHmac(
+                          algorithm,
+                          data,
+                          key
+                        ) {
+                          var dataWa =
+                            __vueoAsWordArray(
+                              data
+                            );
+
+                          var keyWa =
+                            __vueoAsWordArray(
+                              key
+                            );
+
+                          var result =
+                            __vueoCryptoNative({
+                              op: "hmac",
+                              algorithm: algorithm,
+                              data:
+                                __vueoBytesToB64(
+                                  dataWa._bytes
+                                ),
+                              key:
+                                __vueoBytesToB64(
+                                  keyWa._bytes
+                                )
+                            });
+
+                          return new VueoWordArray(
+                            __vueoB64ToBytes(
+                              result.data
+                            )
+                          );
+                        }
+
+                        function __vueoCipherData(
+                          cipher
+                        ) {
+                          if (
+                            typeof cipher === "string"
+                          ) {
+                            return cipher;
+                          }
+
+                          if (
+                            cipher &&
+                            cipher.ciphertext
+                          ) {
+                            return __vueoBytesToB64(
+                              __vueoAsWordArray(
+                                cipher.ciphertext
+                              )._bytes
+                            );
+                          }
+
+                          return __vueoBytesToB64(
+                            __vueoAsWordArray(
+                              cipher
+                            )._bytes
+                          );
+                        }
+
+                        function __vueoDecrypt(
+                          algorithm,
+                          cipher,
+                          key,
+                          options
+                        ) {
+                          options =
+                            options || {};
+
+                          var keyWa =
+                            __vueoAsWordArray(
+                              key
+                            );
+
+                          var ivWa =
+                            options.iv
+                              ? __vueoAsWordArray(
+                                  options.iv
+                                )
+                              : new VueoWordArray([]);
+
+                          var result =
+                            __vueoCryptoNative({
+                              op: "decrypt",
+                              algorithm: algorithm,
+                              data:
+                                __vueoCipherData(
+                                  cipher
+                                ),
+                              key:
+                                __vueoBytesToB64(
+                                  keyWa._bytes
+                                ),
+                              iv:
+                                __vueoBytesToB64(
+                                  ivWa._bytes
+                                )
+                            });
+
+                          return new VueoWordArray(
+                            __vueoB64ToBytes(
+                              result.data
+                            )
+                          );
+                        }
+
+                        function __vueoEncrypt(
+                          algorithm,
+                          plaintext,
+                          key,
+                          options
+                        ) {
+                          options =
+                            options || {};
+
+                          var dataWa =
+                            __vueoAsWordArray(
+                              plaintext
+                            );
+
+                          var keyWa =
+                            __vueoAsWordArray(
+                              key
+                            );
+
+                          var ivWa =
+                            options.iv
+                              ? __vueoAsWordArray(
+                                  options.iv
+                                )
+                              : new VueoWordArray([]);
+
+                          var result =
+                            __vueoCryptoNative({
+                              op: "encrypt",
+                              algorithm: algorithm,
+                              data:
+                                __vueoBytesToB64(
+                                  dataWa._bytes
+                                ),
+                              key:
+                                __vueoBytesToB64(
+                                  keyWa._bytes
+                                ),
+                              iv:
+                                __vueoBytesToB64(
+                                  ivWa._bytes
+                                )
+                            });
+
+                          var ciphertext =
+                            new VueoWordArray(
+                              __vueoB64ToBytes(
+                                result.data
+                              )
+                            );
+
+                          return {
+                            ciphertext: ciphertext,
+                            toString: function () {
+                              return __vueoCryptoJsModule.enc.Base64
+                                .stringify(
+                                  ciphertext
+                                );
+                            }
+                          };
+                        }
+
+                        var __vueoCryptoJsModule = {
+                          lib: {
+                            WordArray: {
+                              create:
+                                function (
+                                  words,
+                                  sigBytes
+                                ) {
+                                  if (
+                                    words instanceof
+                                    VueoWordArray
+                                  ) {
+                                    return words.clone();
+                                  }
+
+                                  if (
+                                    words instanceof
+                                    Uint8Array
+                                  ) {
+                                    return new VueoWordArray(
+                                      Array.prototype
+                                        .slice.call(
+                                          words
+                                        )
+                                    );
+                                  }
+
+                                  return new VueoWordArray(
+                                    __vueoWordsToBytes(
+                                      words || [],
+                                      sigBytes
+                                    )
+                                  );
+                                },
+
+                              random:
+                                function (count) {
+                                  var result =
+                                    __vueoCryptoNative({
+                                      op: "random",
+                                      count:
+                                        Number(count || 0)
+                                    });
+
+                                  return new VueoWordArray(
+                                    __vueoB64ToBytes(
+                                      result.data
+                                    )
+                                  );
+                                }
+                            },
+
+                            CipherParams: {
+                              create:
+                                function (value) {
+                                  return value || {};
+                                }
+                            }
+                          },
+
+                          enc: {
+                            Utf8: {
+                              parse:
+                                function (value) {
+                                  return new VueoWordArray(
+                                    __vueoUtf8Bytes(
+                                      value
+                                    )
+                                  );
+                                },
+
+                              stringify:
+                                function (wordArray) {
+                                  return __vueoUtf8String(
+                                    __vueoAsWordArray(
+                                      wordArray
+                                    )._bytes
+                                  );
+                                }
+                            },
+
+                            Base64: {
+                              parse:
+                                function (value) {
+                                  return new VueoWordArray(
+                                    __vueoB64ToBytes(
+                                      value
+                                    )
+                                  );
+                                },
+
+                              stringify:
+                                function (wordArray) {
+                                  return __vueoBytesToB64(
+                                    __vueoAsWordArray(
+                                      wordArray
+                                    )._bytes
+                                  );
+                                }
+                            },
+
+                            Hex: {
+                              parse:
+                                function (value) {
+                                  value =
+                                    String(value)
+                                      .replace(
+                                        /[^0-9a-f]/gi,
+                                        ""
+                                      );
+
+                                  var bytes = [];
+
+                                  for (
+                                    var i = 0;
+                                    i < value.length;
+                                    i += 2
+                                  ) {
+                                    bytes.push(
+                                      parseInt(
+                                        value.slice(
+                                          i,
+                                          i + 2
+                                        ),
+                                        16
+                                      )
+                                    );
+                                  }
+
+                                  return new VueoWordArray(
+                                    bytes
+                                  );
+                                },
+
+                              stringify:
+                                function (wordArray) {
+                                  return __vueoAsWordArray(
+                                    wordArray
+                                  )._bytes
+                                    .map(
+                                      function (byte) {
+                                        return (
+                                          "0" +
+                                          (
+                                            byte & 255
+                                          ).toString(16)
+                                        ).slice(-2);
+                                      }
+                                    )
+                                    .join("");
+                                }
+                            },
+
+                            Latin1: {
+                              parse:
+                                function (value) {
+                                  var bytes = [];
+
+                                  value =
+                                    String(value);
+
+                                  for (
+                                    var i = 0;
+                                    i < value.length;
+                                    i++
+                                  ) {
+                                    bytes.push(
+                                      value.charCodeAt(i)
+                                        & 255
+                                    );
+                                  }
+
+                                  return new VueoWordArray(
+                                    bytes
+                                  );
+                                },
+
+                              stringify:
+                                function (wordArray) {
+                                  return __vueoAsWordArray(
+                                    wordArray
+                                  )._bytes
+                                    .map(
+                                      function (byte) {
+                                        return String
+                                          .fromCharCode(
+                                            byte & 255
+                                          );
+                                      }
+                                    )
+                                    .join("");
+                                }
+                            }
+                          },
+
+                          mode: {
+                            CBC: "CBC"
+                          },
+
+                          pad: {
+                            Pkcs7: "Pkcs7"
+                          },
+
+                          MD5:
+                            function (value) {
+                              return __vueoCryptoHash(
+                                "MD5",
+                                value
+                              );
+                            },
+
+                          SHA1:
+                            function (value) {
+                              return __vueoCryptoHash(
+                                "SHA1",
+                                value
+                              );
+                            },
+
+                          SHA256:
+                            function (value) {
+                              return __vueoCryptoHash(
+                                "SHA256",
+                                value
+                              );
+                            },
+
+                          SHA384:
+                            function (value) {
+                              return __vueoCryptoHash(
+                                "SHA384",
+                                value
+                              );
+                            },
+
+                          SHA512:
+                            function (value) {
+                              return __vueoCryptoHash(
+                                "SHA512",
+                                value
+                              );
+                            },
+
+                          HmacMD5:
+                            function (data, key) {
+                              return __vueoCryptoHmac(
+                                "MD5",
+                                data,
+                                key
+                              );
+                            },
+
+                          HmacSHA1:
+                            function (data, key) {
+                              return __vueoCryptoHmac(
+                                "SHA1",
+                                data,
+                                key
+                              );
+                            },
+
+                          HmacSHA256:
+                            function (data, key) {
+                              return __vueoCryptoHmac(
+                                "SHA256",
+                                data,
+                                key
+                              );
+                            },
+
+                          HmacSHA512:
+                            function (data, key) {
+                              return __vueoCryptoHmac(
+                                "SHA512",
+                                data,
+                                key
+                              );
+                            },
+
+                          AES: {
+                            decrypt:
+                              function (
+                                cipher,
+                                key,
+                                options
+                              ) {
+                                return __vueoDecrypt(
+                                  "AES",
+                                  cipher,
+                                  key,
+                                  options
+                                );
+                              },
+
+                            encrypt:
+                              function (
+                                plaintext,
+                                key,
+                                options
+                              ) {
+                                return __vueoEncrypt(
+                                  "AES",
+                                  plaintext,
+                                  key,
+                                  options
+                                );
+                              }
+                          },
+
+                          TripleDES: {
+                            decrypt:
+                              function (
+                                cipher,
+                                key,
+                                options
+                              ) {
+                                return __vueoDecrypt(
+                                  "TripleDES",
+                                  cipher,
+                                  key,
+                                  options
+                                );
+                              },
+
+                            encrypt:
+                              function (
+                                plaintext,
+                                key,
+                                options
+                              ) {
+                                return __vueoEncrypt(
+                                  "TripleDES",
+                                  plaintext,
+                                  key,
+                                  options
+                                );
+                              }
+                          }
+                        };
+
+                        function __vueoHtmlNative(
+                          request
+                        ) {
+                          var raw =
+                            __vueoHtmlOp(
+                              JSON.stringify(request)
+                            );
+
+                          var parsed =
+                            JSON.parse(raw);
+
+                          if (parsed.error) {
+                            throw new Error(
+                              parsed.error
+                            );
+                          }
+
+                          return parsed;
+                        }
+
+                        function __vueoCheerioLoad(
+                          html,
+                          options,
+                          isDocument
+                        ) {
+                          var parsed =
+                            __vueoHtmlNative({
+                              op: "parse",
+                              html:
+                                html == null
+                                  ? ""
+                                  : String(html),
+                              baseUri:
+                                options &&
+                                options.baseURI
+                                  ? String(
+                                      options.baseURI
+                                    )
+                                  : ""
+                            });
+
+                          var documentId =
+                            parsed.documentId;
+
+                          function Selection(ids) {
+                            this._ids =
+                              (ids || []).slice();
+
+                            this.length =
+                              this._ids.length;
+
+                            for (
+                              var i = 0;
+                              i < this._ids.length;
+                              i++
+                            ) {
+                              this[i] = {
+                                __vueoNodeId:
+                                  this._ids[i],
+                                __vueoDocumentId:
+                                  documentId
+                              };
+                            }
+                          }
+
+                          function idsFromResponse(
+                            response
+                          ) {
+                            return (
+                              response.ids ||
+                              []
+                            );
+                          }
+
+                          function opIds(
+                            op,
+                            ids,
+                            extra
+                          ) {
+                            var request = {
+                              op: op,
+                              documentId:
+                                documentId,
+                              ids:
+                                ids || []
+                            };
+
+                            if (extra) {
+                              Object.keys(extra)
+                                .forEach(
+                                  function (key) {
+                                    request[key] =
+                                      extra[key];
+                                  }
+                                );
+                            }
+
+                            return idsFromResponse(
+                              __vueoHtmlNative(
+                                request
+                              )
+                            );
+                          }
+
+                          Selection.prototype.eq =
+                            function (index) {
+                              index = Number(index);
+
+                              if (index < 0) {
+                                index =
+                                  this._ids.length +
+                                  index;
+                              }
+
+                              if (
+                                index < 0 ||
+                                index >=
+                                this._ids.length
+                              ) {
+                                return new Selection([]);
+                              }
+
+                              return new Selection([
+                                this._ids[index]
+                              ]);
+                            };
+
+                          Selection.prototype.first =
+                            function () {
+                              return this.eq(0);
+                            };
+
+                          Selection.prototype.last =
+                            function () {
+                              return this.eq(-1);
+                            };
+
+                          Selection.prototype.get =
+                            function (index) {
+                              if (
+                                index == null
+                              ) {
+                                return this.toArray();
+                              }
+
+                              var selected =
+                                this.eq(index);
+
+                              return selected.length
+                                ? selected[0]
+                                : undefined;
+                            };
+
+                          Selection.prototype.toArray =
+                            function () {
+                              var result = [];
+
+                              for (
+                                var i = 0;
+                                i < this._ids.length;
+                                i++
+                              ) {
+                                result.push({
+                                  __vueoNodeId:
+                                    this._ids[i],
+                                  __vueoDocumentId:
+                                    documentId
+                                });
+                              }
+
+                              return result;
+                            };
+
+                          Selection.prototype.each =
+                            function (callback) {
+                              for (
+                                var i = 0;
+                                i < this._ids.length;
+                                i++
+                              ) {
+                                callback.call(
+                                  this[i],
+                                  i,
+                                  this[i]
+                                );
+                              }
+
+                              return this;
+                            };
+
+                          Selection.prototype.map =
+                            function (callback) {
+                              var values = [];
+
+                              for (
+                                var i = 0;
+                                i < this._ids.length;
+                                i++
+                              ) {
+                                values.push(
+                                  callback.call(
+                                    this[i],
+                                    i,
+                                    this[i]
+                                  )
+                                );
+                              }
+
+                              return {
+                                get:
+                                  function (index) {
+                                    if (
+                                      index == null
+                                    ) {
+                                      return values;
+                                    }
+                                    return values[index];
+                                  },
+
+                                toArray:
+                                  function () {
+                                    return values.slice();
+                                  }
+                              };
+                            };
+
+                          Selection.prototype.filter =
+                            function (selector) {
+                              if (
+                                typeof selector ===
+                                "function"
+                              ) {
+                                var kept = [];
+
+                                for (
+                                  var i = 0;
+                                  i < this._ids.length;
+                                  i++
+                                ) {
+                                  if (
+                                    selector.call(
+                                      this[i],
+                                      i,
+                                      this[i]
+                                    )
+                                  ) {
+                                    kept.push(
+                                      this._ids[i]
+                                    );
+                                  }
+                                }
+
+                                return new Selection(
+                                  kept
+                                );
+                              }
+
+                              return new Selection(
+                                opIds(
+                                  "filter",
+                                  this._ids,
+                                  {
+                                    selector:
+                                      String(selector)
+                                  }
+                                )
+                              );
+                            };
+
+                          Selection.prototype.find =
+                            function (selector) {
+                              return new Selection(
+                                opIds(
+                                  "find",
+                                  this._ids,
+                                  {
+                                    selector:
+                                      String(selector)
+                                  }
+                                )
+                              );
+                            };
+
+                          Selection.prototype.parent =
+                            function () {
+                              return new Selection(
+                                opIds(
+                                  "parent",
+                                  this._ids
+                                )
+                              );
+                            };
+
+                          Selection.prototype.parents =
+                            function (selector) {
+                              return new Selection(
+                                opIds(
+                                  "parents",
+                                  this._ids,
+                                  {
+                                    selector:
+                                      selector == null
+                                        ? ""
+                                        : String(
+                                            selector
+                                          )
+                                  }
+                                )
+                              );
+                            };
+
+                          Selection.prototype.children =
+                            function (selector) {
+                              return new Selection(
+                                opIds(
+                                  "children",
+                                  this._ids,
+                                  {
+                                    selector:
+                                      selector == null
+                                        ? ""
+                                        : String(
+                                            selector
+                                          )
+                                  }
+                                )
+                              );
+                            };
+
+                          Selection.prototype.closest =
+                            function (selector) {
+                              return new Selection(
+                                opIds(
+                                  "closest",
+                                  this._ids,
+                                  {
+                                    selector:
+                                      String(selector)
+                                  }
+                                )
+                              );
+                            };
+
+                          Selection.prototype.next =
+                            function () {
+                              return new Selection(
+                                opIds(
+                                  "next",
+                                  this._ids
+                                )
+                              );
+                            };
+
+                          Selection.prototype.prev =
+                            function () {
+                              return new Selection(
+                                opIds(
+                                  "prev",
+                                  this._ids
+                                )
+                              );
+                            };
+
+                          Selection.prototype.siblings =
+                            function (selector) {
+                              return new Selection(
+                                opIds(
+                                  "siblings",
+                                  this._ids,
+                                  {
+                                    selector:
+                                      selector == null
+                                        ? ""
+                                        : String(
+                                            selector
+                                          )
+                                  }
+                                )
+                              );
+                            };
+
+                          Selection.prototype.text =
+                            function () {
+                              return __vueoHtmlNative({
+                                op: "text",
+                                ids: this._ids
+                              }).value || "";
+                            };
+
+                          Selection.prototype.ownText =
+                            function () {
+                              return __vueoHtmlNative({
+                                op: "ownText",
+                                ids: this._ids
+                              }).value || "";
+                            };
+
+                          Selection.prototype.html =
+                            function () {
+                              return __vueoHtmlNative({
+                                op: "html",
+                                ids: this._ids
+                              }).value || "";
+                            };
+
+                          Selection.prototype.attr =
+                            function (name) {
+                              if (name == null) {
+                                return undefined;
+                              }
+
+                              return __vueoHtmlNative({
+                                op: "attr",
+                                ids: this._ids,
+                                name: String(name)
+                              }).value || undefined;
+                            };
+
+                          Selection.prototype.data =
+                            function (name) {
+                              return this.attr(
+                                "data-" +
+                                String(name)
+                                  .replace(
+                                    /[A-Z]/g,
+                                    function (letter) {
+                                      return (
+                                        "-" +
+                                        letter.toLowerCase()
+                                      );
+                                    }
+                                  )
+                              );
+                            };
+
+                          Selection.prototype.val =
+                            function () {
+                              return this.attr("value");
+                            };
+
+                          Selection.prototype.is =
+                            function (selector) {
+                              return !!__vueoHtmlNative({
+                                op: "is",
+                                ids: this._ids,
+                                selector:
+                                  String(selector)
+                              }).bool;
+                            };
+
+                          Selection.prototype.hasClass =
+                            function (name) {
+                              return !!__vueoHtmlNative({
+                                op: "hasClass",
+                                ids: this._ids,
+                                name: String(name)
+                              }).bool;
+                            };
+
+                          Selection.prototype.remove =
+                            function () {
+                              __vueoHtmlNative({
+                                op: "remove",
+                                ids: this._ids
+                              });
+                              return this;
+                            };
+
+                          function $(input) {
+                            if (
+                              input &&
+                              input.__vueoNodeId
+                            ) {
+                              return new Selection([
+                                input.__vueoNodeId
+                              ]);
+                            }
+
+                            if (
+                              input instanceof
+                              Selection
+                            ) {
+                              return input;
+                            }
+
+                            var selector =
+                              String(input == null
+                                ? ""
+                                : input);
+
+                            if (!selector) {
+                              return new Selection([]);
+                            }
+
+                            return new Selection(
+                              idsFromResponse(
+                                __vueoHtmlNative({
+                                  op: "select",
+                                  documentId:
+                                    documentId,
+                                  selector:
+                                    selector
+                                })
+                              )
+                            );
+                          }
+
+                          $.html =
+                            function (selection) {
+                              if (
+                                selection &&
+                                selection._ids
+                              ) {
+                                return __vueoHtmlNative({
+                                  op: "outerHtml",
+                                  ids:
+                                    selection._ids
+                                }).value || "";
+                              }
+
+                              return __vueoHtmlNative({
+                                op: "html",
+                                ids: [
+                                  parsed.rootId
+                                ]
+                              }).value || "";
+                            };
+
+                          $.root =
+                            function () {
+                              return new Selection([
+                                parsed.rootId
+                              ]);
+                            };
+
+                          return $;
+                        }
+
+                        var __vueoCheerioModule = {
+                          load:
+                            function (
+                              html,
+                              options,
+                              isDocument
+                            ) {
+                              return __vueoCheerioLoad(
+                                html,
+                                options,
+                                isDocument
+                              );
+                            }
+                        };
+
+                        globalThis.require =
+                          function (name) {
+                            if (
+                              name === "axios"
+                            ) {
+                              return __vueoAxiosModule;
+                            }
+
+                            if (
+                              name ===
+                              "cheerio-without-node-native"
+                            ) {
+                              return __vueoCheerioModule;
+                            }
+
+                            if (
+                              name === "cheerio"
+                            ) {
+                              return __vueoCheerioModule;
+                            }
+
+                            if (
+                              name === "crypto-js"
+                            ) {
+                              return __vueoCryptoJsModule;
+                            }
+
+                            throw new Error(
+                              "Unsupported runtime require(): " +
+                              name
+                            );
+                          };
+
+            var module = { exports: {} };
+            var exports = module.exports;
+
+            ${providerScript}
+
+            var __vueoGetStreams =
+              module &&
+              module.exports &&
+              typeof module.exports.getStreams === "function"
+                ? module.exports.getStreams
+                : (
+                    typeof globalThis.getStreams === "function"
+                      ? globalThis.getStreams
+                      : null
+                  );
+
+            if (!__vueoGetStreams) {
+              throw new Error(
+                "Provider does not export getStreams"
+              );
+            }
+
+            var __vueoStreams;
+            try {
+              __vueoStreams = await Promise.resolve(
+                __vueoGetStreams(
+                  ${safeTmdbId},
+                  ${safeMediaType},
+                  ${seasonValue},
+                  ${episodeValue}
+                )
+              );
+
+            } finally {
+              __vueoExecutionFinished = true;
+              __vueoFinishExecution("");
+            }
+
+            JSON.stringify(
+              Array.isArray(__vueoStreams)
+                ? __vueoStreams
+                : []
+            );
+        """.trimIndent()
+    }
+
+    private fun summarizeHttpTrace(
+        requestJson: String,
+        requestId: Long,
+        responseJson: String,
+        elapsedMs: Long,
+        sharedTmdb: Boolean,
+    ): String {
+        val request =
+            runCatching { JSONObject(requestJson) }
+                .getOrNull()
+        val response =
+            runCatching { JSONObject(responseJson) }
+                .getOrNull()
+
+        val method =
+            request?.optString("method", "GET")
+                ?.uppercase()
+                ?: "GET"
+        val url =
+            compactTraceUrl(
+                request?.optString("url").orEmpty()
+            )
+        val status =
+            response?.optInt("status", 0)
+                ?: 0
+        val error =
+            response
+                ?.optString("error")
+                ?.takeIf { it.isNotBlank() }
+        val bodyChars =
+            response?.optString("body")?.length
+                ?: 0
+        val truncated =
+            response?.optBoolean(
+                "bodyTruncated",
+                false,
+            ) == true
+
+        return buildString {
+            val path = runCatching { java.net.URI(request?.optString("url").orEmpty()).path }.getOrNull().orEmpty()
+            val pathHash = java.security.MessageDigest.getInstance("SHA-256").digest(path.toByteArray(Charsets.UTF_8))
+                .take(6).joinToString("") { "%02x".format(it.toInt() and 255) }
+            append("requestId=http-$requestId pathHash=$pathHash responseSource=${if (sharedTmdb) "shared-metadata" else "network"} request=")
+            append(method)
+            append(' ')
+            append(url)
+            append(" status=")
+            append(status)
+            append(" elapsed=")
+            append(elapsedMs)
+            append("ms bodyChars=")
+            append(bodyChars)
+            append(" truncated=")
+            append(truncated)
+            if (sharedTmdb) {
+                append(" sharedTmdb=true")
+            }
+            if (error != null) {
+                append(" error=")
+                append(error.take(120))
+            }
+        }
+    }
+
+    private fun summarizeWebViewTrace(
+        requestJson: String,
+        responseJson: String,
+        elapsedMs: Long,
+    ): String {
+        val request =
+            runCatching { JSONObject(requestJson) }
+                .getOrNull()
+        val response =
+            runCatching { JSONObject(responseJson) }
+                .getOrNull()
+        val url =
+            compactTraceUrl(
+                request?.optString("url").orEmpty()
+            )
+        val error =
+            response
+                ?.optString("error")
+                ?.takeIf { it.isNotBlank() }
+        val streamCount =
+            response
+                ?.optJSONArray("streams")
+                ?.length()
+                ?: 0
+
+        return buildString {
+            append("url=")
+            append(url)
+            append(" elapsed=")
+            append(elapsedMs)
+            append("ms")
+            if (error != null) {
+                append(" error=")
+                append(error.take(120))
+            } else {
+                append(" result=ok streams=")
+                append(streamCount)
+            }
+        }
+    }
+
+    private fun compactTraceUrl(raw: String): String {
+        if (raw.isBlank()) return "<empty>"
+
+        return runCatching {
+            val uri = java.net.URI(raw)
+            buildString {
+                append(uri.scheme ?: "https")
+                append("://")
+                append(uri.host ?: "unknown")
+                val path = uri.rawPath.orEmpty()
+                if (path.isNotBlank()) {
+                    append(path.take(180))
+                }
+            }
+        }.getOrElse {
+            raw.substringBefore('?')
+                .substringBefore('#')
+                .take(220)
+        }
+    }
+
+    private data class ProviderExecution(
+        val streams: List<SourceCandidate>,
+        val error: String?,
+        val errorType: String? = null,
+        val logs: List<String>,
+    )
+
+    private data class ProviderRun(
+        val streams: List<SourceCandidate>,
+        val diagnostic: ProviderDiagnostic,
+    )
+
+    private fun providerRuntimeTimeoutMs(
+        provider: PluginProviderDescriptor,
+    ): Long =
+        provider.runtimeTimeoutMs.coerceIn(
+            MIN_PROVIDER_TIMEOUT_MS,
+            MAX_PROVIDER_TIMEOUT_MS,
+        )
+
+    companion object {
+        private const val MIN_PROVIDER_TIMEOUT_MS =
+            3_000L
+
+        private const val MAX_PROVIDER_TIMEOUT_MS =
+            20_000L
+
+        private const val DEFAULT_MEMORY_CLASS_MB =
+            256
+
+        private const val LOW_MEMORY_CLASS_MB =
+            256
+
+        private const val LOW_MEMORY_HEAP_LIMIT_MB =
+            320
+
+        private const val LOW_MEMORY_SCAN_BUDGET_MS =
+            135_000L
+
+        private const val DEFAULT_SCAN_BUDGET_MS =
+            120_000L
+
+        private const val SLOW_THRESHOLD_MS =
+            3_000L
+
+        private const val MAX_STORED_LOGS =
+            40
+
+        private const val MAX_HTTP_TRACE_ENTRIES =
+            14
+
+        private const val MAX_WEBVIEW_TRACE_ENTRIES =
+            4
+
+        private const val MAX_LOG_LENGTH =
+            1000
+    }
+}

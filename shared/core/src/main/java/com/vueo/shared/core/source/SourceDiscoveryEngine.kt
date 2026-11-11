@@ -1,0 +1,946 @@
+package com.vueo.shared.core.source
+
+import com.vueo.shared.core.extensions.SourceCleaner
+import com.vueo.shared.core.extensions.UnifiedMediaEngine
+import com.vueo.shared.core.extensions.AddonRequestActivity
+import com.vueo.shared.core.media.EpisodeItem
+import com.vueo.shared.core.media.MediaItem
+import com.vueo.shared.core.media.MediaTypePolicy
+import com.vueo.shared.core.media.StreamSource
+import com.vueo.shared.core.media.SubtitleTrack
+import com.vueo.shared.core.player.StreamSubtitlePolicy
+import com.vueo.shared.core.plugin.PluginDiscoveryResult
+import com.vueo.shared.core.plugin.PluginSourceEngine
+import com.vueo.shared.core.plugin.PluginStore
+import com.vueo.shared.core.plugin.AnimeIdResolver
+import com.vueo.shared.core.plugin.TmdbResolver
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * Shared progressive source-discovery orchestration for Mobile and TV.
+ * UI/player lifecycle remains owned by each app; this class owns only the
+ * deterministic cache/addon/plugin/subtitle merge and ranking pipeline.
+ */
+class SourceDiscoveryEngine(
+    private val mediaEngine: UnifiedMediaEngine,
+    private val pluginEngine: PluginSourceEngine,
+    private val pluginStore: PluginStore,
+) {
+    /**
+     * Re-run only subtitle discovery for the current video. This intentionally
+     * avoids touching stream/provider discovery so an in-player subtitle refresh
+     * cannot reload the video, switch server, or disturb playback position.
+     */
+    suspend fun discoverSubtitlesOnly(
+        item: MediaItem,
+        videoId: String,
+        subtitleLanguageCodes: Set<String>? = null,
+        onProgress: (List<SubtitleTrack>) -> Unit = {},
+    ): List<SubtitleTrack> =
+        mediaEngine.resolveSubtitles(
+            type = item.type,
+            videoId = videoId,
+            allowedLanguageCodes = subtitleLanguageCodes,
+            onProgress = onProgress,
+        )
+
+    suspend fun discover(
+        request: SourceDiscoveryRequest,
+        control: SourceDiscoveryControl? = null,
+        onUpdate: (SourceDiscoverySnapshot) -> Unit = {},
+    ): SourceDiscoveryBundle = coroutineScope {
+        val discoveryContext = kotlin.coroutines.coroutineContext
+        fun emitSnapshot(snapshot: SourceDiscoverySnapshot) {
+            try { onUpdate(snapshot) } catch (error: Exception) {
+                discoveryContext.ensureActive()
+                runCatching { com.vueo.shared.core.diagnostics.PerformanceDiagnostics.captureRuntimeEvent(
+                    "DISCOVERY_OBSERVER_ERROR stage=snapshot type=${error::class.java.simpleName}") }
+            }
+        }
+        val item = request.item
+        val videoId = request.videoId
+        val preferredQuality = request.preferredQuality
+        val cacheKey = SourceDiscoveryCache.key(
+            mediaType = item.type,
+            mediaId = item.id,
+            videoId = videoId,
+        )
+        val cached = if (!request.forceRefresh && request.sourceProviderName == null) SourceDiscoveryCache.get(cacheKey) else null
+        // Per-scan memoization avoids parsing the same source on every update.
+        val episodeDecisions = ConcurrentHashMap<StreamSource, String>()
+        fun rejectionReason(source: StreamSource): String {
+            val episode = request.episode ?: return ""
+            return episodeDecisions.computeIfAbsent(source) {
+                SourceEpisodePolicy.mismatch(
+                    name = source.name,
+                    url = source.url,
+                    season = episode.season,
+                    episode = episode.episode,
+                )?.let { found ->
+                    "requested S${episode.season}E${episode.episode}, source states S${found.season}E${found.episode}"
+                }.orEmpty()
+            }
+        }
+        val cachedCandidates = cached?.sources.orEmpty().map { it.toStreamSource() }
+        val cachedStreams = withContext(Dispatchers.Default) {
+            SourceCleaner.clean(
+                sources = cachedCandidates.filter { rejectionReason(it).isEmpty() },
+                preferredQuality = preferredQuality,
+                originalLanguage = item.originalLanguage,
+            )
+        }
+        val configuredPluginProviders = withContext(Dispatchers.Default) {
+            configuredPluginProviderKeys(request)
+        }
+
+        val startedAtNs = System.nanoTime()
+        val activityLog = CopyOnWriteArrayList<SourceDiscoveryActivity>()
+        var subtitles = emptyList<SubtitleTrack>()
+        var subtitlesResolved = false
+        var freshAddonStreams = emptyList<StreamSource>()
+        var freshPluginStreams = emptyList<StreamSource>()
+        var addonRawCount = 0
+        var pluginRawCount = 0
+        var addonCompleted = 0
+        var addonTotal = 0
+        var pluginCompleted = 0
+        var pluginTotal = 0
+        var notice = cached?.notice
+        var firstResultMs: Long? = null
+        var searching = true
+        var latestProgress = if (cached != null) {
+            "Recent sources loaded instantly • checking providers"
+        } else {
+            "Starting source discovery…"
+        }
+        var providerOrder = cachedStreams
+            .asSequence()
+            .filter { it.isDirectPlayable }
+            .map(::providerKey)
+            .distinct()
+            .toList()
+        val loadingProviders = linkedSetOf<String>()
+        var scanBudgetStartMs = 0L
+        var scanBudgetMs = 0L
+        val runningProviders = linkedSetOf<String>()
+        val completedSourceProviders = linkedSetOf<String>()
+        val cancelledProviders = linkedSetOf<String>()
+        val skippedProviders = linkedSetOf<String>()
+        val plannedSourceProviders = withContext(Dispatchers.Default) {
+            (
+                mediaEngine.installed().filter {
+                    mediaEngine.isExtensionEnabled(it.descriptor.installationId) && "stream" in it.descriptor.resources
+                }.map { it.descriptor.name }
+                    .filter { request.sourceProviderName == null || it.equals(request.sourceProviderName, true) } +
+                    configuredPluginProviders
+            ).distinct()
+        }
+
+        fun markProviderLoading(provider: String) {
+            val key = provider.trim().ifBlank { "Other" }
+            synchronized(loadingProviders) {
+                loadingProviders += key
+                completedSourceProviders -= key
+                cancelledProviders -= key
+                skippedProviders -= key
+            }
+        }
+
+        fun markProviderComplete(provider: String) {
+            val key = provider.trim().ifBlank { "Other" }
+            synchronized(loadingProviders) {
+                loadingProviders -= key
+                runningProviders -= key
+                completedSourceProviders += key
+                cancelledProviders -= key
+                skippedProviders -= key
+            }
+        }
+
+        fun finishUnattempted(providers: List<String>, skipped: Boolean) {
+            synchronized(loadingProviders) {
+                providers.filter { it !in completedSourceProviders }.forEach { provider ->
+                    loadingProviders -= provider
+                    runningProviders -= provider
+                    if (skipped) {
+                        cancelledProviders -= provider
+                        skippedProviders += provider
+                    } else {
+                        skippedProviders -= provider
+                        cancelledProviders += provider
+                    }
+                }
+            }
+        }
+
+        fun loadingProviderSnapshot(): List<String> =
+            synchronized(loadingProviders) { loadingProviders.toList() }
+
+        fun elapsedMs(): Long =
+            (System.nanoTime() - startedAtNs) / 1_000_000L
+
+        fun activity(
+            category: String,
+            level: String = "info",
+            message: String,
+        ) {
+            activityLog += SourceDiscoveryActivity(
+                elapsedMs = elapsedMs(),
+                category = category,
+                level = level,
+                message = sanitizeActivityText(message),
+            )
+            if (activityLog.size > MAX_ACTIVITY_ENTRIES) {
+                activityLog.removeAt(0)
+            }
+        }
+
+        fun recordAddonActivity(event: AddonRequestActivity) {
+            if (event.resource == "sources") {
+                if (event.phase == "started") {
+                    markProviderLoading(event.providerName)
+                    synchronized(loadingProviders) { runningProviders += event.providerName.trim().ifBlank { "Other" } }
+                } else {
+                    markProviderComplete(event.providerName)
+                }
+            }
+            val category = if (event.resource == "subtitles") "subtitles" else "requests"
+            val level = when (event.phase) {
+                "timeout", "failed" -> "error"
+                "retrying" -> "warning"
+                else -> "info"
+            }
+            val message = when (event.phase) {
+                "started" -> "${event.providerName} → Requesting ${event.resource}"
+                "retrying" -> "${event.providerName} → Retrying subtitle request"
+                "timeout" -> "${event.providerName} → ${event.resource.replaceFirstChar { it.uppercase() }} timed out after ${event.elapsedMs} ms"
+                "failed" -> "${event.providerName} → ${event.resource.replaceFirstChar { it.uppercase() }} failed (${event.errorType ?: "unknown error"})"
+                else -> buildString {
+                    append("${event.providerName} ← ${event.resultCount} ${event.resource} received")
+                    event.acceptedCount
+                        ?.takeIf { it != event.resultCount }
+                        ?.let { accepted ->
+                            append(" • $accepted preferred accepted")
+                        }
+                    append(" in ${event.elapsedMs} ms")
+                }
+            }
+            activity(category, level, message)
+        }
+
+        fun recordProviders(candidates: List<StreamSource>) {
+            val next = providerOrder.toMutableList()
+            candidates
+                .asSequence()
+                .filter { it.isDirectPlayable }
+                .map(::providerKey)
+                .distinct()
+                .forEach { provider ->
+                    if (provider !in next) next += provider
+                }
+            providerOrder = next
+        }
+
+        val loggedEpisodeRejections = ConcurrentHashMap.newKeySet<StreamSource>()
+        fun episodeMatched(candidates: List<StreamSource>): List<StreamSource> =
+            candidates.filter { source ->
+                val reason = rejectionReason(source)
+                if (reason.isNotEmpty() && loggedEpisodeRejections.add(source)) {
+                    activity(
+                        category = "sources",
+                        level = "warning",
+                        message = "${source.providerName} → Source rejected: $reason",
+                    )
+                }
+                reason.isEmpty()
+            }
+
+        var lastCleanAddonRef: List<StreamSource>? = null
+        var lastCleanPluginRef: List<StreamSource>? = null
+        var lastCleanFresh: List<StreamSource> = emptyList()
+
+        fun cleanFresh(): List<StreamSource> {
+            if (
+                freshAddonStreams === lastCleanAddonRef &&
+                freshPluginStreams === lastCleanPluginRef
+            ) {
+                return lastCleanFresh
+            }
+
+            lastCleanAddonRef = freshAddonStreams
+            lastCleanPluginRef = freshPluginStreams
+            lastCleanFresh = SourceCleaner.clean(
+                sources = episodeMatched(freshAddonStreams + freshPluginStreams),
+                preferredQuality = preferredQuality,
+                originalLanguage = item.originalLanguage,
+            )
+            return lastCleanFresh
+        }
+
+        var lastDisplayFresh: List<StreamSource>? = null
+        var lastDisplayMerged: List<StreamSource> = emptyList()
+        fun mergedWithCache(fresh: List<StreamSource>): List<StreamSource> {
+            if (cachedStreams.isEmpty()) return fresh
+            if (fresh.isEmpty()) return cachedStreams
+            if (lastDisplayFresh !== fresh) {
+                lastDisplayFresh = fresh
+                lastDisplayMerged = SourceCleaner.clean(
+                    sources = cachedStreams + fresh,
+                    preferredQuality = preferredQuality,
+                    originalLanguage = item.originalLanguage,
+                )
+            }
+            return lastDisplayMerged
+        }
+
+        var lastPluginCandidates: List<com.vueo.shared.core.source.SourceCandidate>? = null
+        fun acceptPluginSources(candidates: List<com.vueo.shared.core.source.SourceCandidate>) {
+            if (candidates != lastPluginCandidates) {
+                lastPluginCandidates = candidates
+                freshPluginStreams = candidates.map { it.toStreamSource() }
+            }
+        }
+
+        fun publish(
+            progress: String,
+            streams: List<StreamSource>? = null,
+        ) {
+            val displayedProgress = if (control?.pluginsStopped == true && searching && progress.startsWith("Searching"))
+                "$progress • Plugin scan stopped" else progress
+            latestProgress = displayedProgress
+            val fresh = cleanFresh()
+            val display = streams ?: if (searching) {
+                mergedWithCache(fresh)
+            } else {
+                fresh.ifEmpty { cachedStreams }
+            }
+
+            recordProviders(display)
+            if (
+                firstResultMs == null &&
+                cachedStreams.isEmpty() &&
+                display.isNotEmpty()
+            ) {
+                firstResultMs = elapsedMs()
+            }
+
+            val rawCount = maxOf(
+                cached?.rawCount ?: 0,
+                addonRawCount + pluginRawCount,
+            )
+            emitSnapshot(
+                SourceDiscoverySnapshot(
+                    bundle = SourceDiscoveryBundle(
+                        videoId = videoId,
+                        sources = display,
+                        // Share sidecars from this episode, preferring fresh
+                        // credentials to cached duplicates. Both players consume this bundle.
+                        subtitles = StreamSubtitlePolicy.forEpisode(fresh + display, subtitles),
+                    ),
+                    rawCount = rawCount,
+                    notice = notice,
+                    searching = searching,
+                    progress = displayedProgress,
+                    pluginsStopped = control?.pluginsStopped == true,
+                    sourcesStopped = control?.sourcesStopped == true,
+                    firstResultMs = firstResultMs,
+                    providerOrder = providerOrder,
+                    fromCache = cachedStreams.isNotEmpty(),
+                    subtitlesResolved = subtitlesResolved,
+                    activityLog = activityLog.toList(),
+                    loadingProviders = loadingProviderSnapshot(),
+                    runningProviders = synchronized(loadingProviders) { runningProviders.toList() },
+                    scanBudgetStartMs = scanBudgetStartMs,
+                    scanBudgetMs = scanBudgetMs,
+                    completedSourceProviders = synchronized(loadingProviders) { completedSourceProviders.toList() },
+                    plannedSourceProviders = plannedSourceProviders,
+                    cancelledProviders = synchronized(loadingProviders) { cancelledProviders.toList() },
+                    skippedProviders = synchronized(loadingProviders) { skippedProviders.toList() },
+                )
+            )
+        }
+
+        episodeMatched(cachedCandidates)
+        request.episode?.let { episode ->
+            activity("requests", message = "Episode request → S${episode.season}E${episode.episode}")
+        }
+        activity(
+            category = "system",
+            message = if (request.forceRefresh) {
+                "Source discovery started • manual refresh"
+            } else {
+                "Source discovery started • video ${maskedVideoId(videoId)}"
+            },
+        )
+        if (cachedStreams.isNotEmpty()) {
+            activity("sources", message = "Cache → ${cachedStreams.size} recent sources loaded")
+        }
+        publish(latestProgress, streams = cachedStreams)
+
+        val subtitlesUpdateDeferred = async {
+            if (!request.discoverSubtitles) {
+                subtitlesResolved = true
+                return@async
+            }
+            activity("subtitles", message = "Subtitle discovery started in parallel")
+            request.subtitleLanguageCodes
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { codes ->
+                    activity(
+                        "subtitles",
+                        message = "Preferred-language filter active • ${codes.sorted().joinToString(", ")}",
+                    )
+                }
+            publish(latestProgress)
+            try {
+                subtitles = mediaEngine.resolveSubtitles(
+                    type = item.type,
+                    videoId = videoId,
+                    allowedLanguageCodes = request.subtitleLanguageCodes,
+                    onProgress = { discovered ->
+                        subtitles = discovered
+                        activity(
+                            "subtitles",
+                            message = "Subtitle merge → ${discovered.size} unique tracks available",
+                        )
+                        publish(latestProgress)
+                    },
+                    onInitialPassComplete = {
+                        subtitlesResolved = true
+                        publish(latestProgress)
+                    },
+                    onActivity = ::recordAddonActivity,
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                // Retain any tracks already published before a later request failed.
+                activity(
+                    "subtitles",
+                    level = "error",
+                    message = "Subtitle discovery failed before completion • retaining ${subtitles.size} received tracks",
+                )
+            } finally {
+                if (!subtitlesResolved) {
+                    subtitlesResolved = true
+                    publish(latestProgress)
+                }
+                activity(
+                    "subtitles",
+                    message = "Subtitle discovery completed • ${subtitles.size} tracks",
+                )
+                publish(latestProgress)
+            }
+        }
+
+        val addonsDeferred = async(start = CoroutineStart.LAZY) {
+            activity("requests", message = "Addon source requests started")
+            publish(latestProgress)
+            try {
+                mediaEngine.resolveStreamsProgressive(
+                    providerNameFilter = request.sourceProviderName,
+                    cleanResults = false,
+                    type = item.type,
+                    videoId = videoId,
+                    onActivity = { event ->
+                        recordAddonActivity(event)
+                        publish(latestProgress)
+                    },
+                ) { progress ->
+                    freshAddonStreams = progress.streams
+                    addonRawCount = progress.rawCount
+                    addonCompleted = progress.completedAddons
+                    addonTotal = progress.totalAddons
+                    publish(
+                        progressLabel(
+                            addonCompleted = addonCompleted,
+                            addonTotal = addonTotal,
+                            pluginCompleted = pluginCompleted,
+                            pluginTotal = pluginTotal,
+                            found = cleanFresh().size,
+                        )
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                activity(
+                    "errors",
+                    level = "error",
+                    message = "Addon source discovery failed before completion",
+                )
+                publish(latestProgress)
+                emptyList()
+            } finally {
+                if (control?.sourcesStopped == true) publish("Source scan stopped")
+            }
+        }
+
+        control?.attachAddons(addonsDeferred)
+        addonsDeferred.invokeOnCompletion { control?.detachAddons(addonsDeferred) }
+        addonsDeferred.start()
+
+        val pluginsDeferred = async(start = CoroutineStart.LAZY) {
+            val executionEvents = Channel<Pair<String, Boolean>>(Channel.UNLIMITED)
+            val executionObserver = launch {
+                for ((provider, running) in executionEvents) {
+                    synchronized(loadingProviders) {
+                        if (provider in loadingProviders) {
+                            if (running) runningProviders += provider else runningProviders -= provider
+                        }
+                    }
+                    try { publish(latestProgress) } catch (error: Exception) {
+                        currentCoroutineContext().ensureActive()
+                        runCatching { com.vueo.shared.core.diagnostics.PerformanceDiagnostics.captureRuntimeEvent(
+                            "DISCOVERY_OBSERVER_ERROR stage=status-ui type=${error::class.java.simpleName}") }
+                    }
+                }
+            }
+            try {
+                configuredPluginProviders.forEach(::markProviderLoading)
+                pluginTotal = configuredPluginProviders.size
+                activity(
+                    "requests",
+                    message = buildString {
+                        append("Plugin request → ")
+                        append(item.type)
+                        request.episode?.let { episode ->
+                            append(" • S${episode.season} E${episode.episode}")
+                        }
+                        append(" • ")
+                        append(item.name)
+                    },
+                )
+                publish(latestProgress)
+                var loggedPluginDiagnostics = 0
+                val result = discoverPlugins(
+                    request = request,
+                    configuredPluginProviders = configuredPluginProviders,
+                    onScanBudget = { start, budget ->
+                        scanBudgetStartMs = start
+                        scanBudgetMs = budget
+                        executionEvents.trySend("" to false)
+                        Unit
+                    },
+                    onProviderExecution = { provider, running ->
+                        // Constant-time enqueue; no UI publication while a provider holds a slot.
+                        executionEvents.trySend(provider to running)
+                        Unit
+                    },
+                    onSkipped = { skippedNotice ->
+                        notice = skippedNotice
+                        finishUnattempted(configuredPluginProviders, skipped = true)
+                        publish(
+                            progressLabel(
+                                addonCompleted = addonCompleted,
+                                addonTotal = addonTotal,
+                                pluginCompleted = pluginCompleted,
+                                pluginTotal = pluginTotal,
+                                found = cleanFresh().size,
+                            )
+                        )
+                    },
+                    onProgress = { progressResult, completed, total ->
+                        acceptPluginSources(progressResult.streams)
+                        pluginRawCount = progressResult.streams.size
+                        pluginCompleted = completed
+                        pluginTotal = total
+                        progressResult.diagnostics
+                            .forEach { diagnostic ->
+                                markProviderComplete(
+                                    "${diagnostic.repositoryName} / ${diagnostic.providerName}"
+                                )
+                            }
+                        progressResult.diagnostics
+                            .drop(loggedPluginDiagnostics)
+                            .forEach { diagnostic ->
+                                val failed = diagnostic.status.name in setOf(
+                                    "TIMEOUT", "FAILED", "BLOCKED", "UNAVAILABLE"
+                                )
+                                activity(
+                                    category = if (failed) "errors" else "requests",
+                                    level = if (failed) "error" else "info",
+                                    message = buildString {
+                                        append(diagnostic.providerName)
+                                        append(" ← ")
+                                        append(diagnostic.status.name.lowercase().replace('_', ' '))
+                                        append(" • ")
+                                        append(diagnostic.streamCount)
+                                        append(" sources • ")
+                                        append(diagnostic.responseMs)
+                                        append(" ms")
+                                        diagnostic.errorType?.let { append(" • $it") }
+                                    },
+                                )
+                            }
+                        loggedPluginDiagnostics = progressResult.diagnostics.size
+                        publish(
+                            progressLabel(
+                                addonCompleted = addonCompleted,
+                                addonTotal = addonTotal,
+                                pluginCompleted = pluginCompleted,
+                                pluginTotal = pluginTotal,
+                                found = cleanFresh().size,
+                            )
+                        )
+                    },
+                    forceRefresh = request.forceRefresh,
+                )
+                result?.diagnostics?.forEach { diagnostic ->
+                    markProviderComplete("${diagnostic.repositoryName} / ${diagnostic.providerName}")
+                }
+                finishUnattempted(configuredPluginProviders, skipped = result == null)
+                publish(
+                    progressLabel(
+                        addonCompleted = addonCompleted,
+                        addonTotal = addonTotal,
+                        pluginCompleted = pluginCompleted,
+                        pluginTotal = pluginTotal,
+                        found = cleanFresh().size,
+                    )
+                )
+                result
+            } finally {
+                scanBudgetStartMs = 0L
+                scanBudgetMs = 0L
+                executionEvents.close()
+                withContext(kotlinx.coroutines.NonCancellable) { executionObserver.join() }
+                finishUnattempted(configuredPluginProviders.filter { it !in skippedProviders }, skipped = false)
+                if (control?.pluginsStopped == true) {
+                    activity("system", message = "Plugin discovery stopped for playback; addon/subtitle work continues")
+                    publish(latestProgress)
+                }
+            }
+        }
+        control?.attachPlugins(pluginsDeferred)
+        pluginsDeferred.invokeOnCompletion { control?.detachPlugins(pluginsDeferred) }
+        pluginsDeferred.start()
+
+        try {
+            freshAddonStreams = addonsDeferred.await()
+        } catch (cancelled: CancellationException) {
+            currentCoroutineContext().ensureActive()
+            if (control?.sourcesStopped != true) throw cancelled
+            // Keep partial addon results; subtitles continue in their sibling job.
+        }
+        val pluginResult = try {
+            pluginsDeferred.await()
+        } catch (cancelled: CancellationException) {
+            // Selective plugin cancellation must not cancel the parent scan.
+            currentCoroutineContext().ensureActive()
+            if (control?.pluginsStopped != true) throw cancelled
+            null
+        }
+
+        if (pluginResult != null) {
+            acceptPluginSources(pluginResult.streams)
+            pluginRawCount = pluginResult.streams.size
+            notice = pluginSummary(pluginResult)
+        }
+
+        val freshFinal = cleanFresh()
+        val finalStreams = if (control?.pluginsStopped == true || control?.sourcesStopped == true) {
+            mergedWithCache(freshFinal)
+        } else freshFinal.ifEmpty { cachedStreams }
+        searching = false
+        finishUnattempted(loadingProviderSnapshot(), skipped = false)
+        synchronized(loadingProviders) { loadingProviders.clear(); runningProviders.clear() }
+        recordProviders(finalStreams)
+
+        val rawCount = maxOf(
+            cached?.rawCount ?: 0,
+            addonRawCount + pluginRawCount,
+        )
+        val finalProgress = if (control?.sourcesStopped == true) {
+            "Source scan stopped • ${finalStreams.size} unique sources"
+        } else if (control?.pluginsStopped == true) {
+            "Search finished • plugins stopped • ${finalStreams.size} unique sources"
+        } else if (finalStreams.isEmpty()) {
+            "Search complete • no sources found"
+        } else {
+            "Search complete • ${finalStreams.size} unique sources"
+        }
+        val removedCount = (rawCount - finalStreams.size).coerceAtLeast(0)
+        activity(
+            category = "sources",
+            message = "Validation → $rawCount raw • ${finalStreams.size} unique • $removedCount removed",
+        )
+        finalStreams.firstOrNull()?.let { recommended ->
+            activity(
+                category = "sources",
+                message = "Ranking → ${recommended.providerName} selected as current top source",
+            )
+        }
+        activity(
+            category = "system",
+            level = if (finalStreams.isEmpty()) "warning" else "info",
+            message = finalProgress,
+        )
+        latestProgress = finalProgress
+        var finalBundle = SourceDiscoveryBundle(
+            videoId = videoId,
+            sources = finalStreams,
+            subtitles = StreamSubtitlePolicy.forEpisode(freshFinal + finalStreams, subtitles),
+        )
+
+        if (finalStreams.isNotEmpty() && request.sourceProviderName == null) {
+            SourceDiscoveryCache.put(
+                key = cacheKey,
+                sources = finalStreams.map { it.toSourceCandidate() },
+                rawCount = rawCount,
+                notice = notice,
+            )
+        }
+
+        emitSnapshot(
+            SourceDiscoverySnapshot(
+                bundle = finalBundle,
+                rawCount = rawCount,
+                notice = notice,
+                searching = false,
+                pluginsStopped = control?.pluginsStopped == true,
+                sourcesStopped = control?.sourcesStopped == true,
+                progress = finalProgress,
+                firstResultMs = firstResultMs,
+                providerOrder = providerOrder,
+                fromCache = cachedStreams.isNotEmpty(),
+                subtitlesResolved = subtitlesResolved,
+                activityLog = activityLog.toList(),
+                loadingProviders = emptyList(),
+                completedSourceProviders = synchronized(loadingProviders) { completedSourceProviders.toList() },
+                plannedSourceProviders = plannedSourceProviders,
+                cancelledProviders = synchronized(loadingProviders) { cancelledProviders.toList() },
+                skippedProviders = synchronized(loadingProviders) { skippedProviders.toList() },
+            )
+        )
+
+        // Streams are complete independently from subtitle addons. Publish the
+        // playable result now; slow subtitle retries may continue and merge into
+        // the active player without holding source selection or next-episode play.
+        subtitlesUpdateDeferred.await()
+        finalBundle = finalBundle.copy(
+            subtitles = StreamSubtitlePolicy.forEpisode(freshFinal + finalStreams, subtitles),
+        )
+        emitSnapshot(
+            SourceDiscoverySnapshot(
+                bundle = finalBundle,
+                rawCount = rawCount,
+                notice = notice,
+                searching = false,
+                pluginsStopped = control?.pluginsStopped == true,
+                sourcesStopped = control?.sourcesStopped == true,
+                progress = finalProgress,
+                firstResultMs = firstResultMs,
+                providerOrder = providerOrder,
+                fromCache = cachedStreams.isNotEmpty(),
+                subtitlesResolved = true,
+                activityLog = activityLog.toList(),
+                loadingProviders = emptyList(),
+                completedSourceProviders = synchronized(loadingProviders) { completedSourceProviders.toList() },
+                plannedSourceProviders = plannedSourceProviders,
+                cancelledProviders = synchronized(loadingProviders) { cancelledProviders.toList() },
+                skippedProviders = synchronized(loadingProviders) { skippedProviders.toList() },
+            )
+        )
+        finalBundle
+    }
+
+    private suspend fun discoverPlugins(
+        request: SourceDiscoveryRequest,
+        configuredPluginProviders: List<String>,
+        onSkipped: (String) -> Unit,
+        onScanBudget: (Long, Long) -> Unit,
+        onProviderExecution: (String, Boolean) -> Unit,
+        onProgress: suspend (PluginDiscoveryResult, Int, Int) -> Unit,
+        forceRefresh: Boolean,
+    ): PluginDiscoveryResult? {
+        if (!pluginStore.pluginsEnabled() || configuredPluginProviders.isEmpty()) {
+            return null
+        }
+
+        val item = request.item
+        val apiKey = pluginStore.tmdbApiKey()
+        // Anime catalogue IDs identify a part, whose local episode numbers can differ from TMDB.
+        val anime = if (AnimeIdResolver.supports(item.id)) AnimeIdResolver.resolve(
+            rawId = item.id, mediaType = item.type, episode = request.episode,
+            apiKey = apiKey, knownTmdbId = item.tmdbId,
+        ) else null
+        val resolution = if (anime != null) TmdbResolver.Resolution(
+            anime.tmdbId, if (anime.tmdbId != null) TmdbResolver.Route.ANIME_ID else TmdbResolver.Route.NO_MAPPING,
+        ) else TmdbResolver.resolveDetailed(
+            rawId = item.id,
+            mediaType = item.type,
+            apiKey = apiKey,
+            knownTmdbId = item.tmdbId,
+        )
+        val pluginSeason = anime?.season ?: request.episode?.season
+        val pluginEpisode = anime?.episode ?: request.episode?.episode
+        val tmdbId = resolution.tmdbId
+        com.vueo.shared.core.diagnostics.PerformanceDiagnostics.captureRuntimeEvent(
+            "[SOURCES] TMDB_IDENTITY type=${item.type} rawId=${item.id.take(100)} " +
+                "metadataTmdb=${item.tmdbId ?: "none"} route=${resolution.route} resolved=${tmdbId ?: "none"} " +
+                "keyConfigured=${apiKey.isNotBlank()} pluginEpisode=$pluginSeason:$pluginEpisode animeReason=${anime?.reason ?: "none"}"
+        )
+        if (tmdbId == null) {
+            val reason = anime?.reason ?: when (resolution.route) {
+                TmdbResolver.Route.UNSUPPORTED_ID -> "the addon ID format is unsupported and metadata supplied no TMDB ID"
+                TmdbResolver.Route.INVALID_TYPE -> "the media type is unsupported"
+                TmdbResolver.Route.CONFLICT -> "the supplied identity fields disagree"
+                TmdbResolver.Route.AMBIGUOUS -> "multiple TMDB identities matched the exact external ID"
+                TmdbResolver.Route.REQUEST_FAILED -> "the exact ID lookup failed; check the connection or configured TMDB key"
+                else -> "no exact TMDB mapping was available for this item"
+            }
+            onSkipped("Plugin providers skipped: $reason.")
+            return null
+        }
+
+        return try {
+            pluginEngine.discoverProgressive(
+                tmdbId = tmdbId,
+                mediaType = MediaTypePolicy.pluginType(item.type),
+                season = pluginSeason,
+                episode = pluginEpisode,
+                mediaTitle = item.name,
+                mediaOriginalTitle = item.originalTitle,
+                mediaAliases = item.aliases,
+                mediaYear = item.releaseInfo,
+                mediaExternalId = item.id,
+                mediaOriginalLanguage = item.originalLanguage,
+                animeContent = com.vueo.shared.core.media.AnimeMediaPolicy.isAnime(item),
+                providerNameFilter = request.sourceProviderName,
+                onScanBudget = onScanBudget,
+                onProviderExecution = onProviderExecution,
+                forceRefresh = forceRefresh,
+            ) { progress ->
+                onProgress(
+                    progress.result,
+                    progress.completedProviders,
+                    progress.totalProviders,
+                )
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun pluginSummary(result: PluginDiscoveryResult): String =
+        "Plugins: ${result.attemptedProviders} checked • " +
+            "${result.successfulProviders} online • " +
+            "${result.slowProviders} slow • " +
+            "${result.noResultProviders} no results • " +
+            "${result.needsSetupProviders} setup • " +
+            "${result.unavailableProviders} unavailable • " +
+            "${result.blockedProviders} blocked • " +
+            "${result.timeoutProviders} timeout • " +
+            "${result.failedProviders} failed."
+
+    private fun configuredPluginProviderKeys(
+        request: SourceDiscoveryRequest,
+    ): List<String> {
+        return pluginEngine.discoveryProviderKeys(
+            mediaType = MediaTypePolicy.pluginType(request.item.type).lowercase(),
+            animeContent = com.vueo.shared.core.media.AnimeMediaPolicy.isAnime(request.item),
+            providerNameFilter = request.sourceProviderName,
+        )
+    }
+
+    private fun progressLabel(
+        addonCompleted: Int,
+        addonTotal: Int,
+        pluginCompleted: Int,
+        pluginTotal: Int,
+        found: Int,
+    ): String = buildString {
+        append("Searching")
+        if (addonTotal > 0) append(" • Addons $addonCompleted/$addonTotal")
+        if (pluginTotal > 0) append(" • Providers $pluginCompleted/$pluginTotal")
+        if (found > 0) append(" • $found found")
+    }
+
+    private fun providerKey(source: StreamSource): String =
+        source.providerName.trim().ifBlank { "Other" }
+}
+
+data class SourceDiscoveryRequest(
+    val item: MediaItem,
+    val episode: EpisodeItem?,
+    val videoId: String,
+    val preferredQuality: String? = null,
+    val forceRefresh: Boolean = false,
+    val subtitleLanguageCodes: Set<String>? = null,
+    val sourceProviderName: String? = null,
+    val discoverSubtitles: Boolean = true,
+)
+
+data class SourceDiscoverySnapshot(
+    val bundle: SourceDiscoveryBundle,
+    val rawCount: Int,
+    val notice: String?,
+    val searching: Boolean,
+    val progress: String,
+    val firstResultMs: Long?,
+    val providerOrder: List<String>,
+    val fromCache: Boolean,
+    val subtitlesResolved: Boolean,
+    val activityLog: List<SourceDiscoveryActivity> = emptyList(),
+    val loadingProviders: List<String> = emptyList(),
+    val pluginsStopped: Boolean = false,
+    val sourcesStopped: Boolean = false,
+    val completedSourceProviders: List<String> = emptyList(),
+    val plannedSourceProviders: List<String> = emptyList(),
+    val scanBudgetStartMs: Long = 0L,
+    val scanBudgetMs: Long = 0L,
+    val runningProviders: List<String> = emptyList(),
+    val cancelledProviders: List<String> = emptyList(),
+    val skippedProviders: List<String> = emptyList(),
+)
+
+data class SourceDiscoveryActivity(
+    val elapsedMs: Long,
+    val category: String,
+    val level: String,
+    val message: String,
+)
+
+data class SourceDiscoveryBundle(
+    val videoId: String,
+    val sources: List<StreamSource>,
+    val subtitles: List<SubtitleTrack>,
+)
+
+private const val MAX_ACTIVITY_ENTRIES = 180
+
+private fun maskedVideoId(value: String): String =
+    value.trim().let { clean ->
+        when {
+            clean.length <= 18 -> clean
+            else -> clean.take(8) + "…" + clean.takeLast(6)
+        }
+    }
+
+private val ACTIVITY_SECRET_REGEX =
+    Regex("(?i)(token|api[_-]?key|authorization|cookie)=([^&\\s]+)")
+
+private val ACTIVITY_URL_REGEX =
+    Regex("https?://[^\\s]+")
+
+private fun sanitizeActivityText(value: String): String =
+    value
+        .replace(ACTIVITY_SECRET_REGEX) { match ->
+            "${match.groupValues[1]}=•••"
+        }
+        .replace(ACTIVITY_URL_REGEX, "[request URL hidden]")
+        .take(280)

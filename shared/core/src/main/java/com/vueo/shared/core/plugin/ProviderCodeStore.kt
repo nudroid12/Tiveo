@@ -1,0 +1,375 @@
+package com.vueo.shared.core.plugin
+
+import android.content.Context
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import java.io.File
+import java.security.MessageDigest
+
+data class ProviderCodeSyncResult(
+    val repository: PluginRepositoryDescriptor,
+    val readyProviders: Int,
+    val failedProviders: Int,
+    val errors: List<String>,
+)
+
+class ProviderCodeStore(context: Context) {
+    private val appContext = context.applicationContext
+    private val root = File(
+        appContext.filesDir,
+        CACHE_DIRECTORY,
+    )
+
+    init {
+        migrateLegacyCacheIfNeeded(
+            filesDir = appContext.filesDir,
+            target = root,
+        )
+        root.mkdirs()
+    }
+
+    fun read(
+        repository: PluginRepositoryDescriptor,
+        provider: PluginProviderDescriptor,
+    ): String? {
+        val file = fileFor(repository, provider)
+
+        if (!file.isFile || file.length() > PluginHttp.MAX_PROVIDER_SCRIPT_BYTES) {
+            return null
+        }
+
+        return runCatching {
+            file.inputStream().use { input ->
+                val buffer = okio.Buffer()
+                val bytes = ByteArray(32 * 1024)
+                while (true) {
+                    val count = input.read(bytes)
+                    if (count == -1) break
+                    require(buffer.size + count <= PluginHttp.MAX_PROVIDER_SCRIPT_BYTES) {
+                        "Provider script exceeds the 8 MiB size limit."
+                    }
+                    buffer.write(bytes, 0, count)
+                }
+                buffer.readUtf8().takeIf { it.isNotBlank() }
+            }
+        }.getOrNull()
+    }
+
+    fun write(
+        repository: PluginRepositoryDescriptor,
+        provider: PluginProviderDescriptor,
+        source: String,
+    ) {
+        require(source.isNotBlank()) {
+            "Provider script is empty."
+        }
+
+        require(source.toByteArray(Charsets.UTF_8).size.toLong() <= PluginHttp.MAX_PROVIDER_SCRIPT_BYTES) {
+            "Provider script exceeds the 8 MiB size limit."
+        }
+        val file = fileFor(repository, provider)
+        file.parentFile?.mkdirs()
+
+        val temp = File(
+            file.parentFile,
+            file.name + ".tmp",
+        )
+
+        temp.writeText(source, Charsets.UTF_8)
+
+        if (!temp.renameTo(file)) {
+            file.writeText(
+                temp.readText(Charsets.UTF_8),
+                Charsets.UTF_8,
+            )
+            temp.delete()
+        }
+    }
+
+    fun isReady(
+        repository: PluginRepositoryDescriptor,
+        provider: PluginProviderDescriptor,
+    ): Boolean {
+        // UI readiness is metadata-only; actual execution validates script text.
+        val file = fileFor(repository, provider)
+        return file.isFile && file.length() in 1L..PluginHttp.MAX_PROVIDER_SCRIPT_BYTES
+    }
+
+    fun has(
+        repository: PluginRepositoryDescriptor,
+        provider: PluginProviderDescriptor,
+    ): Boolean =
+        fileFor(repository, provider).isFile
+
+    fun readyCount(
+        repository: PluginRepositoryDescriptor,
+    ): Int =
+        repository.providers.count {
+            isReady(repository, it)
+        }
+
+    fun removeRepository(manifestUrl: String) {
+        runCatching {
+            File(root, hash(manifestUrl))
+                .deleteRecursively()
+        }
+    }
+
+    /** Run under the same repository mutation lock as script writes. */
+    internal fun pruneObsoleteCode(repository: PluginRepositoryDescriptor) {
+        if (repository.providers.isEmpty()) return
+        val directory = File(root, hash(repository.manifestUrl))
+        val keepNames = repository.providers.map { fileFor(repository, it).name }.toSet()
+        val obsolete = directory.listFiles().orEmpty().filter {
+            it.isFile && SCRIPT_FILE_PATTERN.matches(it.name) && it.name !in keepNames
+        }
+        if (obsolete.isEmpty()) return
+
+        // Old filenames are hashes, so do not guess which failed provider an
+        // old script belongs to. Retain every old script until the entire
+        // installed manifest has readable replacements, including disabled ones.
+        val installedStore = PluginStore(appContext)
+        fun manifestStillCurrent(): Boolean =
+            installedStore.repositories().firstOrNull {
+                it.manifestUrl == repository.manifestUrl
+            }?.providers == repository.providers
+
+        if (!manifestStillCurrent()) return
+        if (repository.providers.any { read(repository, it) == null }) return
+        for (file in obsolete) {
+            if (!manifestStillCurrent()) return
+            file.delete()
+        }
+    }
+
+    private fun fileFor(
+        repository: PluginRepositoryDescriptor,
+        provider: PluginProviderDescriptor,
+    ): File {
+        val repoDir = File(
+            root,
+            hash(repository.manifestUrl),
+        )
+
+        val key = listOf(
+            provider.id,
+            provider.version,
+            provider.filename,
+        ).joinToString("|")
+
+        return File(
+            repoDir,
+            "${hash(key)}.js",
+        )
+    }
+
+    private fun hash(value: String): String =
+        MessageDigest
+            .getInstance("SHA-256")
+            .digest(value.toByteArray(Charsets.UTF_8))
+            .joinToString("") {
+                "%02x".format(it)
+            }
+
+    companion object {
+        private val SCRIPT_FILE_PATTERN = Regex("[0-9a-f]{64}\\.js")
+        private const val CACHE_DIRECTORY = "vueo_plugin_scrapers"
+        private const val LEGACY_CACHE_DIRECTORY = "nuvio_plugin_scrapers"
+
+        internal fun clearStoredCode(context: Context) {
+            val filesDir = context.applicationContext.filesDir
+            listOf(
+                CACHE_DIRECTORY,
+                LEGACY_CACHE_DIRECTORY,
+            ).forEach { directory ->
+                runCatching {
+                    File(filesDir, directory).deleteRecursively()
+                }
+            }
+        }
+
+        private fun migrateLegacyCacheIfNeeded(
+            filesDir: File,
+            target: File,
+        ) {
+            if (target.exists()) return
+
+            val legacy = File(
+                filesDir,
+                LEGACY_CACHE_DIRECTORY,
+            )
+            if (!legacy.isDirectory) return
+
+            if (legacy.renameTo(target)) return
+
+            runCatching {
+                target.mkdirs()
+                legacy.copyRecursively(
+                    target = target,
+                    overwrite = false,
+                )
+                legacy.deleteRecursively()
+            }
+        }
+    }
+}
+
+class ProviderCodeSyncManager(
+    context: Context,
+) {
+    private val pluginStore = PluginStore(context.applicationContext)
+    private val store = ProviderCodeStore(
+        context.applicationContext
+    )
+
+    companion object {
+        // Shared by startup, settings and preflight manager instances.
+        private val concurrency = Semaphore(3)
+        private val providerLocks = Array(64) { Mutex() }
+        private val repositoryMutationLocks = Array(64) { Mutex() }
+    }
+
+    private fun repositoryMutationLock(repository: PluginRepositoryDescriptor): Mutex =
+        repositoryMutationLocks[
+            (repository.manifestUrl.hashCode() and Int.MAX_VALUE) % repositoryMutationLocks.size
+        ]
+
+    suspend fun syncRepository(
+        repository: PluginRepositoryDescriptor,
+        force: Boolean,
+    ): ProviderCodeSyncResult =
+        syncProviders(
+            repository = repository,
+            providers = repository.providers,
+            force = force,
+        )
+
+    suspend fun syncProviders(
+        repository: PluginRepositoryDescriptor,
+        providers: List<PluginProviderDescriptor>,
+        force: Boolean,
+    ): ProviderCodeSyncResult = coroutineScope {
+        val errors = mutableListOf<String>()
+        val uniqueProviders = providers.distinctBy { it.id }
+        if (uniqueProviders.isEmpty()) {
+            return@coroutineScope ProviderCodeSyncResult(repository, 0, 0, emptyList())
+        }
+
+        val outcomes = uniqueProviders.map { provider ->
+            async(Dispatchers.IO) {
+                val lockKey = "${repository.manifestUrl}|${provider.id}|${provider.version}|${provider.filename}"
+                providerLocks[(lockKey.hashCode() and Int.MAX_VALUE) % providerLocks.size].withLock {
+                    concurrency.withPermit {
+                        if (
+                            !force &&
+                            store.isReady(repository, provider)
+                        ) {
+                            return@withPermit true
+                        }
+
+                        runCatching {
+                            val url =
+                                PluginRepositoryClient
+                                    .providerScriptUrl(
+                                        repository,
+                                        provider,
+                                    )
+
+                            val source =
+                                PluginHttp.getText(url)
+
+                            repositoryMutationLock(repository).withLock {
+                                // Compare under the write lock: explicit refresh can
+                                // return identical text. Ready/no-change syncs must
+                                // not evict useful short-lived discovery results.
+                                if (store.read(repository, provider) != source) {
+                                    store.write(repository, provider, source)
+                                    // Invalidate immediately after publication. Other
+                                    // provider jobs may fail or be cancelled later.
+                                    PluginRuntimeCache.clear()
+                                }
+                            }
+
+                            true
+                        }.getOrElse { error ->
+                            if (error is CancellationException) throw error
+                            synchronized(errors) {
+                                errors +=
+                                    "${provider.name}: " +
+                                    (
+                                        error.message
+                                            ?: error::class.java.simpleName
+                                    )
+                            }
+                            false
+                        }
+                    }
+                }
+            }
+        }.awaitAll()
+
+        if (outcomes.all { it }) {
+            withContext(Dispatchers.IO) {
+                repositoryMutationLock(repository).withLock {
+                    // Cleanup is best-effort; it must not turn a successful
+                    // provider sync into a failure.
+                    runCatching { store.pruneObsoleteCode(repository) }
+                }
+            }
+        }
+        ProviderCodeSyncResult(
+            repository = repository,
+            readyProviders = outcomes.count { it },
+            failedProviders = outcomes.count { !it },
+            errors = errors.take(8),
+        )
+    }
+
+    suspend fun syncEnabled(
+        repositories: List<PluginRepositoryDescriptor>,
+        pluginStore: PluginStore,
+    ) = coroutineScope {
+        if (!pluginStore.pluginsEnabled()) return@coroutineScope
+        repositories
+            .filter(pluginStore::isRepositoryEnabled)
+            .map { repository ->
+                async {
+                    val providers =
+                        repository.providers
+                            .filter { provider ->
+                                pluginStore.isProviderEnabled(
+                                    repository,
+                                    provider,
+                                )
+                            }
+
+                    syncProviders(
+                        repository = repository,
+                        providers = providers,
+                        force = false,
+                    )
+                }
+            }
+            .awaitAll()
+        Unit
+    }
+
+    /** Automatic warm-up: respect master/repository/provider enable preferences.
+     * Missing code for a subsequently enabled provider is repaired by runtime
+     * preflight on first use. Explicit syncRepository/syncProviders retain their
+     * caller-selected scope, including manual refresh of disabled providers.
+     */
+    suspend fun syncMissing(
+        repositories: List<PluginRepositoryDescriptor>,
+    ) {
+        syncEnabled(repositories, pluginStore)
+    }
+}
