@@ -1,5 +1,6 @@
 package com.vueo.tv.settings
 
+import com.vueo.tv.ui.TvModalDialog
 import com.vueo.tv.ui.theme.TvTabMarkerHost
 import com.vueo.tv.ui.theme.tvTabMarker
 
@@ -1590,6 +1591,54 @@ private fun TvInstallDialogButton(label: String, enabled: Boolean, modifier: Mod
         ),
         contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
     ) { Text(label, fontSize = 13.sp, fontWeight = FontWeight.Medium) }
+}
+
+@Composable
+internal fun TvDeveloperPinChoice(
+    onCancel: () -> Unit,
+    onSkip: () -> Unit,
+    onSetPin: () -> Unit,
+) {
+    val skipRequester = remember { FocusRequester() }
+    val setPinRequester = remember { FocusRequester() }
+
+    TvModalDialog(onDismissRequest = onCancel, initialFocus = skipRequester) {
+        val finish = com.vueo.tv.ui.motion.LocalTvMotionFinish.current
+        Box(
+            modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = .65f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(
+                modifier = Modifier.width(440.dp)
+                    .background(TvSettingsContrast.Card, RoundedCornerShape(18.dp))
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Text("Protect Developer options?", color = TvDesign.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                Text("Set a 4-digit PIN or continue without one.", color = TvDesign.Muted, fontSize = 13.sp)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)) {
+                    TvInstallDialogButton(
+                        label = "Skip",
+                        enabled = true,
+                        modifier = Modifier.focusRequester(skipRequester).focusProperties {
+                            left = FocusRequester.Cancel
+                            right = setPinRequester
+                        },
+                        onClick = { finish { onSkip() } },
+                    )
+                    TvInstallDialogButton(
+                        label = "Set PIN",
+                        enabled = true,
+                        modifier = Modifier.focusRequester(setPinRequester).focusProperties {
+                            left = skipRequester
+                            right = FocusRequester.Cancel
+                        },
+                        onClick = { finish { onSetPin() } },
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable

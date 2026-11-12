@@ -112,6 +112,9 @@ private val TvSettingsRootDestinations = listOf(
 )
 
 private const val DEVELOPER_OPTIONS_PIN = "developer_options_pin"
+private const val DEVELOPER_OPTIONS_PIN_SKIPPED = "developer_options_pin_skipped"
+
+private enum class DeveloperPinStep { UNLOCK, VERIFY_RESET, SET_NEW, CONFIRM_NEW }
 private const val HIDDEN_SETTINGS_CATEGORIES = "developer_hidden_settings_categories"
 
 private val HideableSettingsPages = setOf(
@@ -174,7 +177,11 @@ internal fun TvSettingsScreen(
     var pinRecord by remember(preferences) {
         mutableStateOf(preferences.getString(DEVELOPER_OPTIONS_PIN, null))
     }
-    var showPinEntry by remember { mutableStateOf(false) }
+    var pinSkipped by remember(preferences) {
+        mutableStateOf(preferences.getBoolean(DEVELOPER_OPTIONS_PIN_SKIPPED, false))
+    }
+    var showPinChoice by remember { mutableStateOf(false) }
+    var pinStep by remember { mutableStateOf<DeveloperPinStep?>(null) }
     var firstPin by remember { mutableStateOf<String?>(null) }
     var pinError by remember { mutableStateOf<String?>(null) }
     var pinAttempt by remember { mutableIntStateOf(0) }
@@ -184,7 +191,8 @@ internal fun TvSettingsScreen(
     fun closePinEntry() {
         pinJob?.cancel()
         pinJob = null
-        showPinEntry = false
+        showPinChoice = false
+        pinStep = null
         firstPin = null
         pinError = null
     }
@@ -224,6 +232,26 @@ internal fun TvSettingsScreen(
     fun openPanel(next: TvSettingsPage) {
         page = next
         panelAutoFocusToken += 1
+    }
+
+    fun openDeveloperOptions() {
+        closePinEntry()
+        developerOptionsEnabled = true
+        openPanel(TvSettingsPage.DEVELOPER_OPTIONS)
+    }
+
+    fun requestDeveloperOptions() {
+        when {
+            pinRecord != null -> pinStep = DeveloperPinStep.UNLOCK
+            pinSkipped -> openDeveloperOptions()
+            else -> showPinChoice = true
+        }
+    }
+
+    fun advancePin(step: DeveloperPinStep, error: String? = null) {
+        pinStep = step
+        pinError = error
+        pinAttempt += 1
     }
 
     fun backPanel() {
@@ -336,6 +364,18 @@ internal fun TvSettingsScreen(
                         },
                         switchChecked = true,
                     ))
+                    add(TvSettingsEntry(
+                        id = "developer-options-pin",
+                        title = if (pinRecord == null) "Set PIN" else "Reset PIN",
+                        subtitle = if (pinRecord == null) {
+                            "Require a PIN to open Developer options."
+                        } else {
+                            "Enter your current PIN to replace it."
+                        },
+                        onActivate = {
+                            pinStep = if (pinRecord == null) DeveloperPinStep.SET_NEW else DeveloperPinStep.VERIFY_RESET
+                        },
+                    ))
                     TvSettingsRootDestinations.filter { it.page in HideableSettingsPages }.forEach { destination ->
                         val hidden = destination.id in hiddenCategories
                         add(TvSettingsEntry(
@@ -381,63 +421,81 @@ internal fun TvSettingsScreen(
                 onProfile = onProfile,
                 onBack = onBack,
                 developerOptionsEnabled = developerOptionsEnabled,
-                onUnlockDeveloperOptions = { showPinEntry = true },
+                onUnlockDeveloperOptions = ::requestDeveloperOptions,
             )
         }
     }
 
-    if (active && showPinEntry) {
-        val existingRecord = pinRecord
-        val confirmation = firstPin
-        key(pinAttempt) {
+    if (active && showPinChoice) {
+        TvDeveloperPinChoice(
+            onCancel = ::closePinEntry,
+            onSkip = {
+                preferences.edit().putBoolean(DEVELOPER_OPTIONS_PIN_SKIPPED, true).apply()
+                pinSkipped = true
+                openDeveloperOptions()
+            },
+            onSetPin = {
+                showPinChoice = false
+                pinStep = DeveloperPinStep.SET_NEW
+            },
+        )
+    }
+
+    val step = pinStep
+    if (active && step != null) {
+        key(step, pinAttempt) {
             TvPinEntryOverlay(
-                title = when {
-                    existingRecord != null -> "Unlock Developer options"
-                    confirmation != null -> "Confirm Developer PIN"
-                    else -> "Set Developer PIN"
+                title = when (step) {
+                    DeveloperPinStep.UNLOCK -> "Unlock Developer options"
+                    DeveloperPinStep.VERIFY_RESET -> "Reset Developer PIN"
+                    DeveloperPinStep.SET_NEW -> "Set Developer PIN"
+                    DeveloperPinStep.CONFIRM_NEW -> "Confirm Developer PIN"
                 },
-                subtitle = when {
-                    existingRecord != null -> "Enter your 4-digit PIN."
-                    confirmation != null -> "Enter the same PIN again."
-                    else -> "Choose a 4-digit PIN."
+                subtitle = when (step) {
+                    DeveloperPinStep.UNLOCK -> "Enter your 4-digit PIN."
+                    DeveloperPinStep.VERIFY_RESET -> "Enter your current PIN."
+                    DeveloperPinStep.SET_NEW -> "Choose a 4-digit PIN."
+                    DeveloperPinStep.CONFIRM_NEW -> "Enter the same PIN again."
                 },
                 errorText = pinError,
                 onComplete = { pin ->
-                    when {
-                        existingRecord == null && confirmation == null -> {
+                    when (step) {
+                        DeveloperPinStep.SET_NEW -> {
                             firstPin = pin
-                            pinError = null
-                            pinAttempt += 1
+                            advancePin(DeveloperPinStep.CONFIRM_NEW)
                         }
-                        existingRecord == null && confirmation != pin -> {
-                            firstPin = null
-                            pinError = "PINs do not match. Try again."
-                            pinAttempt += 1
+                        DeveloperPinStep.CONFIRM_NEW -> {
+                            if (firstPin != pin) {
+                                firstPin = null
+                                advancePin(DeveloperPinStep.SET_NEW, "PINs do not match. Try again.")
+                            } else {
+                                pinJob = pinScope.launch {
+                                    val record = withContext(Dispatchers.Default) {
+                                        runCatching { createDeveloperPinRecord(pin) }.getOrNull()
+                                    }
+                                    pinJob = null
+                                    firstPin = null
+                                    if (record == null) {
+                                        advancePin(DeveloperPinStep.SET_NEW, "Could not set PIN. Try again.")
+                                    } else {
+                                        preferences.edit().putString(DEVELOPER_OPTIONS_PIN, record).apply()
+                                        pinRecord = record
+                                        openDeveloperOptions()
+                                    }
+                                }
+                            }
                         }
-                        else -> {
+                        DeveloperPinStep.UNLOCK, DeveloperPinStep.VERIFY_RESET -> {
+                            val record = pinRecord
                             pinJob = pinScope.launch {
-                                val verifiedRecord = withContext(Dispatchers.Default) {
-                                    runCatching {
-                                        if (existingRecord == null) {
-                                            createDeveloperPinRecord(pin)
-                                        } else {
-                                            existingRecord.takeIf { verifyDeveloperPin(pin, it) }
-                                        }
-                                    }.getOrNull()
+                                val verified = withContext(Dispatchers.Default) {
+                                    record != null && runCatching { verifyDeveloperPin(pin, record) }.getOrDefault(false)
                                 }
                                 pinJob = null
-                                if (verifiedRecord == null) {
-                                    if (existingRecord == null) firstPin = null
-                                    pinError = if (existingRecord == null) "Could not set PIN. Try again." else "Incorrect PIN."
-                                    pinAttempt += 1
-                                } else {
-                                    if (existingRecord == null) {
-                                        preferences.edit().putString(DEVELOPER_OPTIONS_PIN, verifiedRecord).apply()
-                                        pinRecord = verifiedRecord
-                                    }
-                                    closePinEntry()
-                                    developerOptionsEnabled = true
-                                    openPanel(TvSettingsPage.DEVELOPER_OPTIONS)
+                                when {
+                                    !verified -> advancePin(step, "Incorrect PIN.")
+                                    step == DeveloperPinStep.VERIFY_RESET -> advancePin(DeveloperPinStep.SET_NEW)
+                                    else -> openDeveloperOptions()
                                 }
                             }
                         }
