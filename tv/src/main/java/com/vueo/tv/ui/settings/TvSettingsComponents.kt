@@ -75,7 +75,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.vueo.tv.ui.TvDesign
 import com.vueo.tv.home.MODERN_HOME_CONTENT_START_PADDING
-import com.vueo.tv.home.TiveoPageTopBar
+import com.vueo.tv.home.TiveoPageContentFocus
+import com.vueo.tv.home.TiveoTopBar
+import com.vueo.tv.home.TiveoTopBarState
 import com.vueo.tv.home.TiveoTopBarHeight
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -153,8 +155,7 @@ internal fun TvSettingsMasterDetailShell(
     panelHasBack: Boolean,
     onCategorySelected: (String) -> Unit,
     onPanelBack: () -> Unit,
-    onNavigate: (String) -> Unit,
-    onProfile: () -> Unit,
+    topBar: TiveoTopBarState,
     onBack: () -> Unit,
     content: @Composable () -> Unit,
 ) {
@@ -185,8 +186,6 @@ internal fun TvSettingsMasterDetailShell(
     val panelLastFocusedIds = remember { mutableMapOf<String, String>() }
     val panelFocusableRowIds = remember { mutableMapOf<String, List<String>>() }
     var lastPane by remember { mutableStateOf("category") }
-    var navExpanded by remember { mutableStateOf(false) }
-    var navigationFocusIntent by remember { mutableStateOf(false) }
     // Back's exit step belongs to user intent, not transient focus callbacks.
     var backExitPending by remember { mutableStateOf(false) }
     var categorySelectJob by remember { mutableStateOf<Job?>(null) }
@@ -234,24 +233,18 @@ internal fun TvSettingsMasterDetailShell(
     fun focusGlobalNav() {
         categorySelectJob?.cancel()
         panelRestoreJob?.cancel()
-        navigationFocusIntent = true
-        navExpanded = true
+        topBar.focus("Settings")
     }
 
     fun focusSelectedCategory(): Boolean {
-        navigationFocusIntent = false
-        navExpanded = false
-        val focused = runCatching {
+        lastPane = "category"
+        return runCatching {
             categoryRequesters.getValue(selectedCategoryId).requestFocus()
         }.getOrDefault(false)
-        if (focused) lastPane = "category"
-        return focused
     }
 
     fun focusPanel(): Boolean {
         categorySelectJob?.cancel()
-        navigationFocusIntent = false
-        navExpanded = false
         val rowId = panelFocusTargetId(panelKey) ?: return false
         val requester = requesterForPanelRow(panelKey, rowId)
         val focused = runCatching { requester.requestFocus() }.getOrDefault(false)
@@ -270,12 +263,12 @@ internal fun TvSettingsMasterDetailShell(
             // focus back after the user intentionally moved to categories/sidebar.
             for (waitMs in listOf(24L, 48L, 90L, 140L)) {
                 delay(waitMs)
-                if (!active || navigationFocusIntent || lastPane != "panel") return@launch
+                if (!active || topBar.hasFocus || lastPane != "panel") return@launch
                 if (focusPanel()) return@launch
             }
             // Empty panels still need a deterministic escape target. Only fall back
             // after the full retry window, never during a normal panel transition.
-            if (active && !navigationFocusIntent && lastPane == "panel" && panelFocusableRowIds[panelKey].isNullOrEmpty()) {
+            if (active && !topBar.hasFocus && lastPane == "panel" && panelFocusableRowIds[panelKey].isNullOrEmpty()) {
                 focusSelectedCategory()
             }
         }
@@ -284,13 +277,13 @@ internal fun TvSettingsMasterDetailShell(
     BackHandler(enabled = active) {
         PerformanceDiagnostics.captureRuntimeEvent(
             "TV_TAB_BACK tab=Settings action=" + when {
-                backExitPending || navExpanded -> "home"
+                backExitPending || topBar.hasFocus -> "home"
                 panelHasBack -> "panel_parent"
                 else -> "open_navigation"
             }
         )
         when {
-            backExitPending || navExpanded -> {
+            backExitPending || topBar.hasFocus -> {
                 categorySelectJob?.cancel()
                 panelRestoreJob?.cancel()
                 onBack()
@@ -311,13 +304,13 @@ internal fun TvSettingsMasterDetailShell(
         }
         delay(90)
         // Back may have already opened navigation during the entry delay.
-        if (!navigationFocusIntent && !navExpanded) {
+        if (!topBar.hasFocus) {
             runCatching { categoryRequesters.getValue(selectedCategoryId).requestFocus() }
         }
     }
 
     LaunchedEffect(panelAutoFocusToken, active) {
-        if (!active || navigationFocusIntent || panelAutoFocusToken <= 0) return@LaunchedEffect
+        if (!active || topBar.hasFocus || panelAutoFocusToken <= 0) return@LaunchedEffect
 
         // Opening/backing between Settings panels keeps ownership in the panel.
         // The destination rows publish asynchronously, so use the shared retry path.
@@ -380,8 +373,7 @@ internal fun TvSettingsMasterDetailShell(
                                 grouped = false,
                                 requester = categoryRequesters.getValue(category.id),
                                 onFocused = categoryFocused@{
-                                    if (!active || navigationFocusIntent) return@categoryFocused
-                                    navExpanded = false
+                                    if (!active || topBar.hasFocus) return@categoryFocused
                                     if (lastPane == "panel") {
                                         // During panel replacement Compose may momentarily
                                         // fall back into the category column. That is not a
@@ -399,7 +391,7 @@ internal fun TvSettingsMasterDetailShell(
                                             delay(90L)
                                             if (
                                                 active && lastPane == "category" &&
-                                                !navigationFocusIntent
+                                                !topBar.hasFocus
                                             ) {
                                                 onCategorySelected(category.id)
                                             }
@@ -448,8 +440,7 @@ internal fun TvSettingsMasterDetailShell(
                     onLeftToCategory = { focusSelectedCategory() },
                     onRowFocused = { rowId ->
                         panelLastFocusedIds[panelKey] = rowId
-                        if (active && !navigationFocusIntent) {
-                            navExpanded = false
+                        if (active && !topBar.hasFocus) {
                             lastPane = "panel"
                         }
                     },
@@ -470,21 +461,14 @@ internal fun TvSettingsMasterDetailShell(
             }
         }
 
-        TiveoPageTopBar(
-            selected = "Settings",
+        TiveoPageContentFocus(
+            topBar = topBar,
+            tab = "Settings",
             active = active,
-            navigationFocused = navExpanded,
-            onFocused = {
-                PerformanceDiagnostics.captureRuntimeEvent("TV_TAB_NAV_FOCUS tab=Settings")
-            },
-            onNavigate = onNavigate,
-            onProfile = onProfile,
             onReturnToContent = {
                 backExitPending = false
-                navigationFocusIntent = false
                 if (lastPane != "panel" || !focusPanel()) focusSelectedCategory()
             },
-            modifier = Modifier.align(Alignment.TopStart),
         )
     }
 }
@@ -901,10 +885,10 @@ internal fun TvSettingsListScreen(
     val lastFocusable = entries.lastOrNull { it.enabled }
     var lastFocusedId by remember { mutableStateOf(firstFocusable?.id.orEmpty()) }
     var previousFocusableIds by remember { mutableStateOf(focusableIds) }
-    var navExpanded by remember { mutableStateOf(false) }
+    val topBar = remember { TiveoTopBarState() }
 
-    LaunchedEffect(focusableIds, preferredFocusId, navExpanded) {
-        if (navExpanded || focusableIds.isEmpty()) return@LaunchedEffect
+    LaunchedEffect(focusableIds, preferredFocusId, topBar.hasFocus) {
+        if (topBar.hasFocus || focusableIds.isEmpty()) return@LaunchedEffect
 
         preferredFocusId?.takeIf { it in focusableIds }?.let { lastFocusedId = it }
 
@@ -924,11 +908,10 @@ internal fun TvSettingsListScreen(
     }
 
     fun focusSettingsNav() {
-        navExpanded = true
+        topBar.focus("Settings")
     }
 
     fun restoreContentFocus(): Boolean {
-        navExpanded = false
         val targetId = lastFocusedId.takeIf { it in focusableIds } ?: focusableIds.firstOrNull() ?: return false
         val requester = rowRequesters[targetId] ?: return false
         lastFocusedId = targetId
@@ -993,11 +976,11 @@ internal fun TvSettingsListScreen(
             ) {
                 if (accountHeader) item(key = "account-header") {
                     TvAccountSummaryPanel(entries, { rowRequesters.getValue(it) },
-                        { lastFocusedId = it; navExpanded = false }, ::focusSettingsNav)
+                        { lastFocusedId = it }, ::focusSettingsNav)
                 }
                 if (addonLayout) item(key = "workspace-controls") {
                     TvAddonControls(entries, { rowRequesters.getValue(it) },
-                        { lastFocusedId = it; navExpanded = false }, ::focusSettingsNav)
+                        { lastFocusedId = it }, ::focusSettingsNav)
                 }
                 var previousSection: String? = null
                 entries.filterNot { (accountHeader && it.id in accountHeaderIds) || (addonLayout && (it.isAddonControl() || it.isRepositoryAction())) }.forEachIndexed { index, entry ->
@@ -1022,13 +1005,12 @@ internal fun TvSettingsListScreen(
                             contentLayout = addonLayout,
                             entries = entries,
                             requesterFor = { rowRequesters.getValue(it) },
-                            onEntryFocused = { lastFocusedId = it; navExpanded = false },
+                            onEntryFocused = { lastFocusedId = it },
                             requester = rowRequesters.getValue(entry.id),
                             first = entry.id == firstFocusable?.id,
                             last = entry.id == lastFocusable?.id,
                             onLeftToSidebar = ::focusSettingsNav,
                             onFocused = {
-                                navExpanded = false
                                 lastFocusedId = entry.id
                             },
                         )
@@ -1048,13 +1030,11 @@ internal fun TvSettingsListScreen(
             }
         }
 
-        TiveoPageTopBar(
+        TiveoTopBar(
+            state = topBar,
             selected = "Settings",
-            active = true,
-            navigationFocused = navExpanded,
-            onFocused = {},
-            onNavigate = onNavigate,
-            onProfile = onProfile,
+            canFocus = true,
+            onNavigate = { tab -> if (tab == "Profile") onProfile() else onNavigate(tab) },
             onReturnToContent = { restoreContentFocus() },
             modifier = Modifier.align(Alignment.TopStart),
         )

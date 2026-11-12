@@ -63,7 +63,8 @@ import com.vueo.tv.ui.TvNetworkImage
 import com.vueo.tv.ui.TvPosterActionDialog
 import com.vueo.tv.ui.motion.TvMotion
 import com.vueo.tv.home.MODERN_HOME_CONTENT_START_PADDING
-import com.vueo.tv.home.TiveoPageTopBar
+import com.vueo.tv.home.TiveoPageContentFocus
+import com.vueo.tv.home.TiveoTopBarState
 import com.vueo.tv.home.TiveoTopBarHeight
 import com.vueo.tv.ui.tvPosterActivation
 import kotlinx.coroutines.launch
@@ -95,12 +96,11 @@ private object TvLibraryFocusMemory {
 
 @Suppress("UNUSED_PARAMETER")
 @Composable
-fun TvLibraryScreen(
+internal fun TvLibraryScreen(
     runtime: TvRuntime,
     refreshToken: Int,
     active: Boolean = true,
-    onNavigate: (String) -> Unit,
-    onProfile: () -> Unit,
+    topBar: TiveoTopBarState,
     onOpenMedia: (MediaItem) -> Unit,
     onResume: (LibraryPlaybackEntry) -> Unit,
     onBack: () -> Unit,
@@ -166,7 +166,6 @@ fun TvLibraryScreen(
             TvLibraryFocusMemory.firstVisibleItemScrollOffset.coerceAtLeast(0),
     )
 
-    var navExpanded by remember { mutableStateOf(false) }
     var lastTarget by remember { mutableStateOf(TvLibraryFocusMemory.lastTarget) }
     var lastMediaKey by remember { mutableStateOf(TvLibraryFocusMemory.lastMediaKey) }
 
@@ -178,14 +177,14 @@ fun TvLibraryScreen(
     }
 
     fun focusTopBar() {
-        navExpanded = true
+        topBar.focus("Library")
     }
 
     BackHandler(enabled = active && actionMedia == null) {
         PerformanceDiagnostics.captureRuntimeEvent(
-            "TV_TAB_BACK tab=Library action=${if (navExpanded) "home" else "open_navigation"}"
+            "TV_TAB_BACK tab=Library action=${if (topBar.hasFocus) "home" else "open_navigation"}"
         )
-        if (navExpanded) onBack() else focusTopBar()
+        if (topBar.hasFocus) onBack() else focusTopBar()
     }
 
     fun requestHeaderFocus(): Boolean =
@@ -203,7 +202,6 @@ fun TvLibraryScreen(
     }
 
     fun restoreContentFocus(): Boolean {
-        navExpanded = false
         val requester = when (lastTarget) {
             "view" -> viewModeRequester
             "item" -> lastMediaKey?.let(mediaRequesters::get)
@@ -230,10 +228,10 @@ fun TvLibraryScreen(
 
     // Vueo-reference focus restoration: poster first when returning from
     // Detail, otherwise the primary Library selector owns initial focus.
-    LaunchedEffect(active, mediaKeys, gridView, historySelected, navExpanded) {
-        if (!active || navExpanded) return@LaunchedEffect
+    LaunchedEffect(active, mediaKeys, gridView, historySelected) {
+        if (!active || topBar.hasFocus) return@LaunchedEffect
         delay(110)
-        if (navExpanded) return@LaunchedEffect
+        if (topBar.hasFocus) return@LaunchedEffect
         var restored = false
         if (lastTarget == "item") {
             val key = lastMediaKey
@@ -246,11 +244,11 @@ fun TvLibraryScreen(
                 ) {
                     runCatching { gridState.scrollToItem(mediaIndex + LIBRARY_HEADER_ITEMS) }
                 }
-                if (navExpanded) return@LaunchedEffect
+                if (topBar.hasFocus) return@LaunchedEffect
                 restored = runCatching { requester.requestFocus() }.getOrDefault(false)
                 if (!restored) {
                     delay(20)
-                    if (navExpanded) return@LaunchedEffect
+                    if (topBar.hasFocus) return@LaunchedEffect
                     restored = runCatching { requester.requestFocus() }.getOrDefault(false)
                 }
             }
@@ -263,7 +261,7 @@ fun TvLibraryScreen(
         if (!restored) {
             gridState.scrollToItem(0)
             delay(20)
-            if (!navExpanded) requestHeaderFocus()
+            if (!topBar.hasFocus) requestHeaderFocus()
         }
     }
 
@@ -314,18 +312,47 @@ fun TvLibraryScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(
-                            text = "My List",
-                            color = TvDesign.White,
-                            fontSize = 30.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            listOf("Saved", "History").forEachIndexed { index, label ->
+                                val selected = historySelected == (index == 1)
+                                LibraryViewModeButton(
+                                    gridView = gridView,
+                                    label = label,
+                                    selected = selected,
+                                    requester = if (index == 0) favoritesRequester else historyRequester,
+                                    onFocused = {
+                                        if (!selected) {
+                                            historySelected = index == 1
+                                            TvLibraryFocusMemory.firstVisibleItemIndex = 0
+                                            TvLibraryFocusMemory.firstVisibleItemScrollOffset = 0
+                                        }
+                                        if (!topBar.hasFocus) rememberTarget("section")
+                                    },
+                                    onToggle = {
+                                        if (!selected) {
+                                            historySelected = index == 1
+                                            TvLibraryFocusMemory.firstVisibleItemIndex = 0
+                                            TvLibraryFocusMemory.firstVisibleItemScrollOffset = 0
+                                            rememberTarget("section")
+                                        }
+                                    },
+                                    onLeft = {
+                                        if (index == 0) focusTopBar() else favoritesRequester.requestFocus()
+                                        true
+                                    },
+                                    onRight = {
+                                        if (index == 0) historyRequester.requestFocus() else viewModeRequester.requestFocus()
+                                        true
+                                    },
+                                    onDown = ::requestFirstMediaFocus,
+                                )
+                            }
+                        }
                         LibraryViewModeButton(
                             gridView = gridView,
                             requester = viewModeRequester,
                             onFocused = {
-                                if (!navExpanded) rememberTarget("view")
+                                if (!topBar.hasFocus) rememberTarget("view")
                             },
                             onToggle = {
                                 val nextGridView = !gridView
@@ -344,42 +371,6 @@ fun TvLibraryScreen(
                         )
                     }
                     if (deleteHistoryError) Text("Couldn't delete history. Try again.", color = TvDesign.Muted, fontSize = 12.sp)
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        listOf("Saved", "History").forEachIndexed { index, label ->
-                            val selected = historySelected == (index == 1)
-                            LibraryViewModeButton(
-                                gridView = gridView,
-                                label = label,
-                                selected = selected,
-                                requester = if (index == 0) favoritesRequester else historyRequester,
-                                onFocused = {
-                                    if (!selected) {
-                                        historySelected = index == 1
-                                        TvLibraryFocusMemory.firstVisibleItemIndex = 0
-                                        TvLibraryFocusMemory.firstVisibleItemScrollOffset = 0
-                                    }
-                                    if (!navExpanded) rememberTarget("section")
-                                },
-                                onToggle = {
-                                    if (!selected) {
-                                        historySelected = index == 1
-                                        TvLibraryFocusMemory.firstVisibleItemIndex = 0
-                                        TvLibraryFocusMemory.firstVisibleItemScrollOffset = 0
-                                        rememberTarget("section")
-                                    }
-                                },
-                                onLeft = {
-                                    if (index == 0) focusTopBar() else favoritesRequester.requestFocus()
-                                    true
-                                },
-                                onRight = {
-                                    if (index == 0) historyRequester.requestFocus() else viewModeRequester.requestFocus()
-                                    true
-                                },
-                                onDown = ::requestFirstMediaFocus,
-                            )
-                        }
-                    }
                 }
             }
 
@@ -415,7 +406,7 @@ fun TvLibraryScreen(
                                 historyCaption = if (historySelected) historyCaptions[key] else null,
                                 requester = mediaRequesters.getValue(key),
                                 onFocused = {
-                                    if (!navExpanded) rememberTarget("item", key)
+                                    if (!topBar.hasFocus) rememberTarget("item", key)
                                 },
                                 onClick = {
                                     TvLibraryFocusMemory.firstVisibleItemIndex =
@@ -454,7 +445,7 @@ fun TvLibraryScreen(
                                 historyCaption = if (historySelected) historyCaptions[key] else null,
                                 requester = mediaRequesters.getValue(key),
                                 onFocused = {
-                                    if (!navExpanded) rememberTarget("item", key)
+                                    if (!topBar.hasFocus) rememberTarget("item", key)
                                 },
                                 onClick = {
                                     TvLibraryFocusMemory.firstVisibleItemIndex =
@@ -476,26 +467,18 @@ fun TvLibraryScreen(
             }
         }
 
-        TiveoPageTopBar(
-            selected = "Library",
+        TiveoPageContentFocus(
+            topBar = topBar,
+            tab = "Library",
             active = active && actionMedia == null,
-            navigationFocused = navExpanded,
-            onFocused = {
-                if (active && navExpanded) {
-                    PerformanceDiagnostics.captureRuntimeEvent("TV_TAB_NAV_FOCUS tab=Library")
-                }
-            },
-            onNavigate = onNavigate,
-            onProfile = onProfile,
             onReturnToContent = {
                 if (!restoreContentFocus()) {
                     historyScope.launch {
                         gridState.scrollToItem(0)
-                        if (!navExpanded) requestHeaderFocus()
+                        if (topBar.focusedTab == "Library") requestHeaderFocus()
                     }
                 }
             },
-            modifier = Modifier.align(Alignment.TopStart),
         )
     }
 

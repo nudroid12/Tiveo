@@ -17,7 +17,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import com.vueo.shared.core.home.HomeRecommendationSections
@@ -76,16 +75,15 @@ fun rememberTvHomeRetainedState(runtime: TvRuntime): TvHomeRetainedState =
     remember(runtime) { TvHomeRetainedState(runtime) }
 
 @Composable
-fun TvHomeScreen(
+internal fun TvHomeScreen(
     runtime: TvRuntime,
     retainedState: TvHomeRetainedState,
     refreshToken: Int,
     active: Boolean = true,
-    onNavigate: (String) -> Unit,
+    topBar: TiveoTopBarState,
     onOpenMedia: (MediaItem) -> Unit,
     onOpenCollection: (String, String) -> Unit,
     onResume: (LibraryPlaybackEntry) -> Unit,
-    onProfile: () -> Unit,
     onBack: () -> Unit,
 ) {
     val traktContext = LocalContext.current
@@ -343,25 +341,28 @@ fun TvHomeScreen(
 
     val contentFocusRequester = remember { FocusRequester() }
 
-    val homeTabRequester = remember { FocusRequester() }
-    var navExpanded by remember { mutableStateOf(false) }
-    var navigationOwnsFocus by remember { mutableStateOf(false) }
     var contentReturnToken by remember { mutableIntStateOf(0) }
     val routeReturnPending = retainedState.routeFocusAnchor != null
 
     fun focusTopBar() {
-        navExpanded = true
+        if (!routeReturnPending && actionEntry == null) topBar.focus("Home")
     }
 
-    LaunchedEffect(active, navExpanded, routeReturnPending, actionEntry) {
-        if (active && navExpanded && !routeReturnPending && actionEntry == null) {
-            withFrameNanos { }
-            homeTabRequester.requestFocus()
-        }
-    }
+    TiveoPageContentFocus(
+        topBar = topBar,
+        tab = "Home",
+        active = active && !routeReturnPending && actionEntry == null,
+        onReturnToContent = {
+            if (rows.isNotEmpty()) {
+                contentReturnToken += 1
+            } else {
+                runCatching { contentFocusRequester.requestFocus() }
+            }
+        },
+    )
 
     BackHandler(enabled = active) {
-        if (navExpanded) onBack() else focusTopBar()
+        if (topBar.hasFocus) onBack() else focusTopBar()
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -385,39 +386,17 @@ fun TvHomeScreen(
                 retainedState.routeFocusAnchor = it
             },
             onRouteFocusRestored = { retainedState.routeFocusAnchor = null },
-            navigationVisible = navExpanded,
-            navigationOwnsFocus = navigationOwnsFocus,
+            navigationVisible = active && topBar.hasFocus,
+            navigationOwnsFocus = active && topBar.hasFocus,
             contentFocusRequester = contentFocusRequester,
             focusResetToken = homeFocusResetToken,
             contentReturnToken = contentReturnToken,
-            onContentFocused = {
-                navigationOwnsFocus = false
-                navExpanded = false
-            },
+            onContentFocused = {},
             onOpenNavigation = ::focusTopBar,
             // Rows captures the retained anchor before this changes routes.
             onOpen = { entry -> entry.open(onOpenMedia, onResume, onOpenCollection) },
             onLongClick = { entry -> if (entry !is TvHomeEntry.Folder) actionEntry = entry },
             modifier = Modifier.fillMaxSize(),
-        )
-
-        VirioHomeTopBar(
-            homeRequester = homeTabRequester,
-            canFocus = active && !routeReturnPending && actionEntry == null,
-            onFocused = {
-                navigationOwnsFocus = true
-                navExpanded = true
-            },
-            onNavigate = onNavigate,
-            onProfile = onProfile,
-            onReturnToContent = {
-                if (rows.isNotEmpty()) {
-                    contentReturnToken += 1
-                } else {
-                    runCatching { contentFocusRequester.requestFocus() }
-                }
-            },
-            modifier = Modifier.align(Alignment.TopStart),
         )
     }
 

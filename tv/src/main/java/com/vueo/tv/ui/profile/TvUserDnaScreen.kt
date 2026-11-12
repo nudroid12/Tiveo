@@ -60,41 +60,68 @@ import com.vueo.shared.core.dna.UserDnaSnapshot
 import com.vueo.shared.core.profile.ProfileAvatarCatalog
 import com.vueo.shared.core.storage.VueoProfile
 import com.vueo.tv.core.TvRuntime
+import com.vueo.tv.home.MODERN_HOME_CONTENT_START_PADDING
+import com.vueo.tv.home.TiveoPageContentFocus
+import com.vueo.tv.home.TiveoTopBarHeight
+import com.vueo.tv.home.TiveoTopBarState
 import com.vueo.tv.ui.TvDesign
 import com.vueo.tv.ui.motion.TvMotion
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** TV presentation of Mobile's local-first Your DNA experience. */
 @Composable
-fun TvUserDnaScreen(
+internal fun TvUserDnaScreen(
     runtime: TvRuntime,
     dataVersion: Int,
+    active: Boolean,
+    topBar: TiveoTopBarState,
     onSwitchProfiles: () -> Unit,
     onBack: () -> Unit,
 ) {
     val profile = remember(dataVersion) { runtime.profileStore.activeProfile() }
-    val dnaEnabled = runtime.dnaPreferences.userDnaEnabled(profile.id)
-    if (!dnaEnabled) {
-        DnaDisabledScreen(profile, onSwitchProfiles, onBack)
+    val switchRequester = remember(profile.id) { FocusRequester() }
+    fun focusSwitchProfiles() {
+        runCatching { switchRequester.requestFocus() }
+    }
+
+    BackHandler(enabled = active) {
+        if (topBar.hasFocus) onBack() else topBar.focus("Profile")
+    }
+    LaunchedEffect(profile.id, active) {
+        if (!active) return@LaunchedEffect
+        withFrameNanos { }
+        if (!topBar.hasFocus) focusSwitchProfiles()
+    }
+    TiveoPageContentFocus(topBar, "Profile", active, ::focusSwitchProfiles)
+
+    if (!runtime.dnaPreferences.userDnaEnabled(profile.id)) {
+        DnaDisabledScreen(profile, switchRequester, onSwitchProfiles) { topBar.focus("Profile") }
         return
     }
-    val snapshot = remember(profile.id, dataVersion) { runtime.dnaEngine.build() }
-    val switchRequester = remember { FocusRequester() }
+
+    var dnaSnapshot by remember(profile.id, dataVersion) { mutableStateOf<UserDnaSnapshot?>(null) }
+    LaunchedEffect(profile.id, dataVersion, active) {
+        if (active && dnaSnapshot == null) {
+            dnaSnapshot = withContext(Dispatchers.IO) { runtime.dnaEngine.build() }
+        }
+    }
+    val snapshot = dnaSnapshot
     val scrollState = rememberScrollState()
     val scrollScope = rememberCoroutineScope()
     val scrollStep = with(LocalDensity.current) { 64.dp.toPx() }
-
-    BackHandler(onBack = onBack)
-    LaunchedEffect(profile.id) {
-        withFrameNanos { }
-        runCatching { switchRequester.requestFocus() }
-    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(TvDesign.Black)
-            .padding(horizontal = 56.dp, vertical = 34.dp)
+            .padding(
+                start = MODERN_HOME_CONTENT_START_PADDING,
+                end = MODERN_HOME_CONTENT_START_PADDING,
+                top = TiveoTopBarHeight + 10.dp,
+                bottom = 24.dp,
+            )
             .onPreviewKeyEvent { event ->
                 val direction = when (event.nativeKeyEvent.keyCode) {
                     KeyEvent.KEYCODE_DPAD_DOWN -> 1
@@ -103,7 +130,11 @@ fun TvUserDnaScreen(
                 }
                 if (direction == 0) false else {
                     if (event.type == KeyEventType.KeyDown) {
-                        scrollScope.launch { scrollState.scrollBy(direction * scrollStep) }
+                        if (direction < 0 && scrollState.value == 0) {
+                            topBar.focus("Profile")
+                        } else {
+                            scrollScope.launch { scrollState.scrollBy(direction * scrollStep) }
+                        }
                     }
                     true
                 }
@@ -131,6 +162,8 @@ fun TvUserDnaScreen(
             switchRequester = switchRequester,
             onSwitchProfiles = onSwitchProfiles,
         )
+
+        if (snapshot == null) return@Column
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -167,18 +200,29 @@ fun TvUserDnaScreen(
 @Composable
 private fun DnaDisabledScreen(
     profile: VueoProfile,
+    switchRequester: FocusRequester,
     onSwitchProfiles: () -> Unit,
-    onBack: () -> Unit,
+    onOpenNavigation: () -> Unit,
 ) {
-    val switchRequester = remember(profile.id) { FocusRequester() }
     var focused by remember(profile.id) { mutableStateOf(false) }
-    BackHandler(onBack = onBack)
-    LaunchedEffect(profile.id) {
-        withFrameNanos { }
-        runCatching { switchRequester.requestFocus() }
-    }
     Column(
-        Modifier.fillMaxSize().background(TvDesign.Black).padding(horizontal = 56.dp, vertical = 34.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .background(TvDesign.Black)
+            .padding(
+                start = MODERN_HOME_CONTENT_START_PADDING,
+                end = MODERN_HOME_CONTENT_START_PADDING,
+                top = TiveoTopBarHeight + 10.dp,
+                bottom = 24.dp,
+            )
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                    onOpenNavigation()
+                    true
+                } else {
+                    false
+                }
+            },
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text("Your DNA", color = TvDesign.White, fontSize = 30.sp, fontWeight = FontWeight.Bold)
@@ -214,10 +258,11 @@ private fun DnaDisabledScreen(
 @Composable
 private fun DnaProfileCard(
     profile: VueoProfile,
-    snapshot: UserDnaSnapshot,
+    snapshot: UserDnaSnapshot?,
     switchRequester: FocusRequester,
     onSwitchProfiles: () -> Unit,
 ) {
+    val confidencePercent = snapshot?.confidencePercent ?: 0
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -244,7 +289,7 @@ private fun DnaProfileCard(
                 )
                 Spacer(Modifier.width(10.dp))
                 Text(
-                    text = snapshot.readiness.displayLabel(),
+                    text = snapshot?.readiness?.displayLabel() ?: "Loading…",
                     color = TvDesign.White,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
@@ -279,14 +324,14 @@ private fun DnaProfileCard(
                 ) {
                     Box(
                         modifier = Modifier
-                            .fillMaxWidth((snapshot.confidencePercent / 100f).coerceIn(0f, 1f))
+                            .fillMaxWidth((confidencePercent / 100f).coerceIn(0f, 1f))
                             .height(6.dp)
                             .background(TvDesign.White.copy(alpha = .82f)),
                     )
                 }
                 Spacer(Modifier.width(9.dp))
                 Text(
-                    text = "${snapshot.confidencePercent}%",
+                    text = "${confidencePercent}%",
                     color = TvDesign.White,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,

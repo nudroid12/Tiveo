@@ -45,6 +45,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -81,7 +82,8 @@ import com.vueo.tv.ui.TvPosterActionDialog
 import com.vueo.tv.ui.tvPosterActivation
 import com.vueo.tv.ui.motion.TvMotion
 import com.vueo.tv.home.MODERN_HOME_CONTENT_START_PADDING
-import com.vueo.tv.home.TiveoPageTopBar
+import com.vueo.tv.home.TiveoPageContentFocus
+import com.vueo.tv.home.TiveoTopBarState
 import com.vueo.tv.home.TiveoTopBarHeight
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -194,8 +196,7 @@ internal fun TvSearchScreen(
     contentVersion: Int,
     session: TvSearchSession,
     active: Boolean = true,
-    onNavigate: (String) -> Unit,
-    onProfile: () -> Unit,
+    topBar: TiveoTopBarState,
     onOpenMedia: (MediaItem) -> Unit,
     onBack: () -> Unit,
 ) {
@@ -203,7 +204,6 @@ internal fun TvSearchScreen(
     var discovering by remember { mutableStateOf(session.discoverRows.isEmpty()) }
     var animeDiscovering by remember { mutableStateOf(false) }
     var requestId by remember { mutableStateOf(0L) }
-    var navExpanded by remember { mutableStateOf(false) }
     var initialContentFocusHandled by remember { mutableStateOf(false) }
     var lastContentTarget by remember { mutableStateOf("field") }
     var choiceDialog by remember { mutableStateOf<SearchChoice?>(null) }
@@ -216,11 +216,19 @@ internal fun TvSearchScreen(
     val sortRequester = remember { FocusRequester() }
     val genreRequester = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
+    val choiceDialogOpen = active && choiceDialog != null
 
-    LaunchedEffect(active, navExpanded) {
-        if (!active || navExpanded || initialContentFocusHandled) return@LaunchedEffect
+    DisposableEffect(topBar, choiceDialogOpen) {
+        if (choiceDialogOpen) topBar.focusBlocked = true
+        onDispose {
+            if (choiceDialogOpen) topBar.focusBlocked = false
+        }
+    }
+
+    LaunchedEffect(active, topBar.hasFocus) {
+        if (!active || topBar.hasFocus || initialContentFocusHandled) return@LaunchedEffect
         delay(120)
-        if (!session.restoreResultsFocus) {
+        if (!topBar.hasFocus && !session.restoreResultsFocus) {
             initialContentFocusHandled = runCatching { fieldRequester.requestFocus() }.getOrDefault(false)
         }
     }
@@ -451,7 +459,7 @@ internal fun TvSearchScreen(
         // Cancel any pending poster focus before handing focus to Topbar/Sidebar.
         resultFocusJob[0]?.cancel()
         initialContentFocusHandled = true
-        navExpanded = true
+        topBar.focus("Search")
     }
 
     fun resetGridForFilterChange() {
@@ -482,14 +490,15 @@ internal fun TvSearchScreen(
             }
     }
 
-    LaunchedEffect(active, session.restoreResultsFocus, filteredItems, navExpanded) {
-        if (!active || navExpanded || !session.restoreResultsFocus) return@LaunchedEffect
+    LaunchedEffect(active, session.restoreResultsFocus, filteredItems, topBar.hasFocus) {
+        if (!active || topBar.hasFocus || !session.restoreResultsFocus) return@LaunchedEffect
         val key = session.focusedMediaKey ?: return@LaunchedEffect
         val index = filteredItems.indexOfFirst { mediaKey(it) == key }
         if (index < 0) return@LaunchedEffect
 
         runCatching { gridState.scrollToItem(index) }
         delay(90)
+        if (topBar.hasFocus) return@LaunchedEffect
         val restored = runCatching {
             resultRequesterCache.getOrPut(key) { FocusRequester() }.requestFocus()
         }.getOrDefault(false)
@@ -507,6 +516,7 @@ internal fun TvSearchScreen(
             runCatching { gridState.scrollToItem(0) }
             repeat(4) {
                 withFrameNanos { }
+                if (topBar.hasFocus) return@launch
                 val focused = resultRequesterCache[firstKey]?.let { requester ->
                     runCatching { requester.requestFocus() }.getOrDefault(false)
                 } == true
@@ -522,16 +532,16 @@ internal fun TvSearchScreen(
         dialogReturnFocus = null
         scope.launch {
             delay(40)
-            if (active && !navExpanded) restoreFocus?.invoke()
+            if (active && !topBar.hasFocus) restoreFocus?.invoke()
         }
     }
 
     BackHandler(enabled = active && choiceDialog != null && actionMedia == null) { dismissChoiceDialog() }
     BackHandler(enabled = active && choiceDialog == null && actionMedia == null) {
         PerformanceDiagnostics.captureRuntimeEvent(
-            "TV_TAB_BACK tab=Search action=${if (navExpanded) "home" else "open_navigation"}"
+            "TV_TAB_BACK tab=Search action=${if (topBar.hasFocus) "home" else "open_navigation"}"
         )
-        if (navExpanded) onBack() else focusTopBar()
+        if (topBar.hasFocus) onBack() else focusTopBar()
     }
 
     val contentStartPadding = MODERN_HOME_CONTENT_START_PADDING
@@ -546,13 +556,6 @@ internal fun TvSearchScreen(
                 modifier = Modifier.padding(horizontal = contentStartPadding),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text(
-                    text = "Search",
-                    color = TvDesign.White,
-                    fontSize = 30.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-
                 Box(modifier = Modifier.fillMaxWidth(.82f)) {
                     TvMobileSearchField(
                         value = session.query,
@@ -560,10 +563,10 @@ internal fun TvSearchScreen(
                         requester = fieldRequester,
                         modeRequester = modeRequester,
                         onFocused = {
-                            if (!navExpanded) lastContentTarget = "field"
+                            if (!topBar.hasFocus) lastContentTarget = "field"
                         },
                         onModeFocused = {
-                            if (!navExpanded) lastContentTarget = "mode"
+                            if (!topBar.hasFocus) lastContentTarget = "mode"
                         },
                         onModeChange = { next ->
                             if (next != session.mode) {
@@ -623,7 +626,7 @@ internal fun TvSearchScreen(
                             label = session.typeFilter.label,
                             requester = typeRequester,
                             onFocused = {
-                                if (!navExpanded) lastContentTarget = "type"
+                                if (!topBar.hasFocus) lastContentTarget = "type"
                             },
                             onClick = {
                                 dialogReturnFocus = { runCatching { typeRequester.requestFocus() } }
@@ -656,7 +659,7 @@ internal fun TvSearchScreen(
                             label = session.sortMode.label,
                             requester = sortRequester,
                             onFocused = {
-                                if (!navExpanded) lastContentTarget = "sort"
+                                if (!topBar.hasFocus) lastContentTarget = "sort"
                             },
                             onClick = {
                                 dialogReturnFocus = { runCatching { sortRequester.requestFocus() } }
@@ -686,7 +689,7 @@ internal fun TvSearchScreen(
                             label = session.genre ?: "All Genres",
                             requester = genreRequester,
                             onFocused = {
-                                if (!navExpanded) lastContentTarget = "genre"
+                                if (!topBar.hasFocus) lastContentTarget = "genre"
                             },
                             onClick = {
                                 dialogReturnFocus = { runCatching { genreRequester.requestFocus() } }
@@ -790,7 +793,7 @@ internal fun TvSearchScreen(
                                 catalogLabel = searchCatalogLabel(runtime, item),
                                 requester = resultRequesterCache.getOrPut(key) { FocusRequester() },
                                 onFocused = {
-                                    if (!navExpanded) {
+                                    if (!topBar.hasFocus) {
                                         lastContentTarget = "result:$key"
                                         session.focusedMediaKey = key
                                     }
@@ -830,19 +833,12 @@ internal fun TvSearchScreen(
             }
         }
 
-        TiveoPageTopBar(
-            selected = "Search",
+        TiveoPageContentFocus(
+            topBar = topBar,
+            tab = "Search",
             active = active && choiceDialog == null && actionMedia == null,
-            navigationFocused = navExpanded,
-            onFocused = {
-                if (active && navExpanded) {
-                    PerformanceDiagnostics.captureRuntimeEvent("TV_TAB_NAV_FOCUS tab=Search")
-                }
-            },
-            onNavigate = onNavigate,
-            onProfile = onProfile,
             onReturnToContent = {
-                navExpanded = false
+                initialContentFocusHandled = true
                 val requester = when {
                     lastContentTarget == "type" -> typeRequester
                     lastContentTarget == "sort" -> sortRequester
@@ -855,7 +851,6 @@ internal fun TvSearchScreen(
                 val restored = runCatching { requester?.requestFocus() == true }.getOrDefault(false)
                 if (!restored) fieldRequester.requestFocus()
             },
-            modifier = Modifier.align(Alignment.TopStart),
         )
 
         choiceDialog?.let { dialog ->

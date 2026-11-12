@@ -1,5 +1,6 @@
 package com.vueo.tv.settings
 
+import com.vueo.tv.home.TiveoTopBarState
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
@@ -128,9 +129,10 @@ private fun TvSettingsPage.hasPanelParent(): Boolean = when (this) {
 }
 
 @Composable
-fun TvSettingsScreen(
+internal fun TvSettingsScreen(
     runtime: TvRuntime,
     active: Boolean = true,
+    topBar: TiveoTopBarState,
     onNavigate: (String) -> Unit,
     onProfile: () -> Unit,
     onBack: () -> Unit,
@@ -181,8 +183,7 @@ fun TvSettingsScreen(
             }
         },
         onPanelBack = ::backPanel,
-        onNavigate = onNavigate,
-        onProfile = onProfile,
+        topBar = topBar,
         onBack = onBack,
     ) {
         when (page) {

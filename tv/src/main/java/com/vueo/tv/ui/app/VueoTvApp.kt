@@ -59,6 +59,8 @@ import com.vueo.tv.core.TvRuntime
 import com.vueo.tv.core.TvSourceBundle
 import com.vueo.tv.core.TvSourceDiscoverySnapshot
 import com.vueo.tv.detail.TvDetailScreen
+import com.vueo.tv.home.TiveoTopBar
+import com.vueo.tv.home.TiveoTopBarState
 import com.vueo.tv.home.TvHomeFocusMemory
 import com.vueo.tv.home.TvHomeScreen
 import com.vueo.tv.home.rememberTvHomeRetainedState
@@ -120,6 +122,16 @@ private data class TvEntityReturnDetailState(
     val backStack: List<MediaItem>,
     val returnRoute: TvRoute,
 )
+
+private val TvRoute.topBarTab: String?
+    get() = when (this) {
+        TvRoute.HOME -> "Home"
+        TvRoute.SEARCH -> "Search"
+        TvRoute.LIBRARY -> "Library"
+        TvRoute.SETTINGS -> "Settings"
+        TvRoute.DNA -> "Profile"
+        else -> null
+    }
 
 private val retainedDetailParentRoutes = setOf(
     TvRoute.HOME,
@@ -191,6 +203,7 @@ fun VueoTvApp(
     var detailReturnedFromSource by remember { mutableStateOf(false) }
     var playerReturnRoute by remember { mutableStateOf(TvRoute.SOURCE) }
     val searchSession = remember { TvSearchSession() }
+    val topBar = remember { TiveoTopBarState() }
     val sourceDiscoveryScope = rememberCoroutineScope()
     val backgroundFocus = remember { FocusRequester() }
     val backgroundFocusManager = LocalFocusManager.current
@@ -354,14 +367,23 @@ fun VueoTvApp(
     }
 
     fun navigate(label: String) {
+        if (route.topBarTab == label) return
+        if (label == "Profile") dnaReturnRoute = route
         if (label == "Search") PerformanceDiagnostics.captureRuntimeEvent("SEARCH_TAB_PRESS")
         route = when (label) {
             "Home" -> TvRoute.HOME
             "Search" -> TvRoute.SEARCH
             "Library" -> TvRoute.LIBRARY
             "Settings" -> TvRoute.SETTINGS
+            "Profile" -> TvRoute.DNA
             else -> route
         }
+    }
+
+    fun returnFromTab(destination: TvRoute) {
+        val navigationHadFocus = topBar.hasFocus
+        route = destination
+        if (navigationHadFocus) destination.topBarTab?.let(topBar::focus)
     }
 
     fun openDna(from: TvRoute) {
@@ -1200,21 +1222,10 @@ fun VueoTvApp(
                 modifier = Modifier.fillMaxSize(),
                 targetState = displayedRootRoute,
                 transitionSpec = {
-                    val initialIsTab = initialState in setOf(
-                        TvRoute.HOME,
-                        TvRoute.SEARCH,
-                        TvRoute.LIBRARY,
-                        TvRoute.SETTINGS,
-                    )
-                    val targetIsTab = targetState in setOf(
-                        TvRoute.HOME,
-                        TvRoute.SEARCH,
-                        TvRoute.LIBRARY,
-                        TvRoute.SETTINGS,
-                    )
+                    val initialIsTab = initialState.topBarTab != null
+                    val targetIsTab = targetState.topBarTab != null
                     val isBackTransition =
                         (initialState == TvRoute.DETAIL && targetIsTab) ||
-                            (initialState == TvRoute.DNA && targetIsTab) ||
                             (initialState == TvRoute.PROFILE && targetState != TvRoute.PROFILE) ||
                             (initialState == TvRoute.ENTITY_RESULTS && targetState == TvRoute.DETAIL) ||
                             (initialState == TvRoute.SOURCE && targetState == TvRoute.DETAIL)
@@ -1267,14 +1278,13 @@ fun VueoTvApp(
                         retainedState = homeRetainedState,
                         refreshToken = refreshToken,
                         active = route == TvRoute.HOME,
-                        onNavigate = ::navigate,
+                        topBar = topBar,
                         onOpenMedia = { openDetail(it, TvRoute.HOME) },
                         onOpenCollection = { collection, folder ->
                             collectionId = collection; collectionFolderId = folder
                             route = TvRoute.COLLECTION_FOLDER
                         },
                         onResume = { openPlaybackDetail(it, TvRoute.HOME) },
-                        onProfile = { openDna(TvRoute.HOME) },
                         onBack = onExit,
                     )
                     }
@@ -1292,10 +1302,9 @@ fun VueoTvApp(
                         contentVersion = refreshToken,
                         session = searchSession,
                         active = route == TvRoute.SEARCH,
-                        onNavigate = ::navigate,
-                        onProfile = { openDna(TvRoute.SEARCH) },
+                        topBar = topBar,
                         onOpenMedia = { openDetail(it, TvRoute.SEARCH) },
-                        onBack = { route = TvRoute.HOME },
+                        onBack = { returnFromTab(TvRoute.HOME) },
                     )
                 }
 
@@ -1310,11 +1319,10 @@ fun VueoTvApp(
                         runtime = runtime,
                         refreshToken = refreshToken,
                         active = route == TvRoute.LIBRARY,
-                        onNavigate = ::navigate,
-                        onProfile = { openDna(TvRoute.LIBRARY) },
+                        topBar = topBar,
                         onOpenMedia = { openDetail(it, TvRoute.LIBRARY) },
                         onResume = { openPlaybackDetail(it, TvRoute.LIBRARY) },
-                        onBack = { route = TvRoute.HOME },
+                        onBack = { returnFromTab(TvRoute.HOME) },
                     )
                 }
 
@@ -1324,9 +1332,10 @@ fun VueoTvApp(
                         active = route == TvRoute.SETTINGS,
                         dataVersion = refreshToken,
                         onManageProfiles = { openProfilePicker(TvRoute.SETTINGS) },
+                        topBar = topBar,
                         onNavigate = ::navigate,
                         onProfile = { openDna(TvRoute.SETTINGS) },
-                        onBack = { route = TvRoute.HOME },
+                        onBack = { returnFromTab(TvRoute.HOME) },
                         onDataChanged = { notifyLibraryChanged() },
                         onResetComplete = { openProfilePicker(TvRoute.HOME) },
                     )
@@ -1336,8 +1345,10 @@ fun VueoTvApp(
                     TvUserDnaScreen(
                         runtime = runtime,
                         dataVersion = refreshToken,
+                        active = route == TvRoute.DNA,
+                        topBar = topBar,
                         onSwitchProfiles = { openProfilePicker(TvRoute.DNA) },
-                        onBack = { route = dnaReturnRoute },
+                        onBack = { returnFromTab(dnaReturnRoute) },
                     )
                 }
 
@@ -1603,6 +1614,24 @@ fun VueoTvApp(
                     }
                 }
                 }
+            }
+
+            displayedRootRoute.topBarTab?.let { selected ->
+                TiveoTopBar(
+                    state = topBar,
+                    selected = selected,
+                    canFocus = route.topBarTab != null && modalDepth == 0 && !topBar.focusBlocked &&
+                        (route != TvRoute.HOME || homeRetainedState.routeFocusAnchor == null),
+                    onNavigate = { tab ->
+                        if (route.topBarTab != null && modalDepth == 0 && !topBar.focusBlocked) navigate(tab)
+                    },
+                    onReturnToContent = {
+                        if (!topBar.focusBlocked) route.topBarTab?.let(topBar::returnToContent)
+                    },
+                    modifier = Modifier.align(Alignment.TopStart).graphicsLayer {
+                        alpha = if (topBar.focusBlocked) .28f else 1f
+                    },
+                )
             }
 
             if (retainedDetailActive) {
