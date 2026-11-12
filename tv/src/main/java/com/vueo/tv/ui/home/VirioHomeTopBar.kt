@@ -158,17 +158,25 @@ internal fun TiveoTopBar(
                         up = FocusRequester.Cancel
                         down = FocusRequester.Cancel
                     }
-                    .onFocusChanged { focus ->
-                        val gainedFocus = focus.isFocused && state.focusedTab != tab
-                        state.updateFocus(tab, focus.isFocused)
-                        if (gainedFocus && canFocus) onNavigate(tab)
-                    }
-                    .onPreviewKeyEvent {
-                        if (it.key != Key.DirectionDown) return@onPreviewKeyEvent false
-                        if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.repeatCount == 0) {
-                            onReturnToContent()
+                    .onFocusChanged { focus -> state.updateFocus(tab, focus.isFocused) }
+                    .onPreviewKeyEvent { event ->
+                        when (event.key) {
+                            Key.DirectionLeft, Key.DirectionRight -> {
+                                if (canFocus && event.type == KeyEventType.KeyDown) {
+                                    val step = if (event.key == Key.DirectionLeft) -1 else 1
+                                    val destination = topBarTabs.getOrNull(index + step)
+                                    if (destination != null && state.focus(destination)) onNavigate(destination)
+                                }
+                                true
+                            }
+                            Key.DirectionDown -> {
+                                if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount == 0) {
+                                    onReturnToContent()
+                                }
+                                true
+                            }
+                            else -> false
                         }
-                        true
                     }
                     .semantics { this.selected = isSelected }
                     .clickable(role = Role.Tab) {

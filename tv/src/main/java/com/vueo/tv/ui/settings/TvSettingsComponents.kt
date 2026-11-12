@@ -277,9 +277,8 @@ internal fun TvSettingsMasterDetailShell(
                 if (!active || topBar.hasFocus || lastPane != "panel" || panelKey != currentPanelKey) return@launch
                 if (focusPanel()) return@launch
             }
-            // Empty panels still need a deterministic escape target. Only fall back
-            // after the full retry window, never during a normal panel transition.
-            if (active && !topBar.hasFocus && lastPane == "panel" && panelFocusableRowIds[panelKey].isNullOrEmpty()) {
+            // The saved row can also be off-screen or detached after a panel refresh.
+            if (active && !topBar.hasFocus && lastPane == "panel" && panelKey == currentPanelKey) {
                 focusSelectedCategory()
             }
         }
@@ -466,10 +465,7 @@ internal fun TvSettingsMasterDetailShell(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()
-                        .focusRestorer {
-                            panelFocusTargetId(panelKey)?.let { requesterForPanelRow(panelKey, it) }
-                                ?: FocusRequester.Default
-                        }
+                        // Embedded panels restore their own registered row after a route change.
                         .focusGroup(),
                 ) {
                     content()

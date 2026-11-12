@@ -212,7 +212,7 @@ fun VueoTvApp(
         TvModalFocusHost(
             open = {
                 if (modalDepth == 0) {
-                    backgroundFocus.saveFocusedChild()
+                    runCatching { backgroundFocus.saveFocusedChild() }
                     backgroundFocusManager.clearFocus(force = true)
                 }
                 modalDepth += 1
@@ -222,7 +222,11 @@ fun VueoTvApp(
                 sourceDiscoveryScope.launch {
                     withFrameNanos { }
                     if (modalDepth == 0) {
-                        if (!backgroundFocus.restoreFocusedChild()) backgroundFocus.requestFocus()
+                        val restored = runCatching { backgroundFocus.restoreFocusedChild() }.getOrDefault(false)
+                        if (!restored) {
+                            if (route == TvRoute.SETTINGS) topBar.returnToContent("Settings")
+                            else runCatching { backgroundFocus.requestFocus() }
+                        }
                     }
                 }
             },
