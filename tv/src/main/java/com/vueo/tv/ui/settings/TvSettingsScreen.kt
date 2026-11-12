@@ -1,6 +1,7 @@
 package com.vueo.tv.settings
 
 import android.content.Context
+import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
@@ -14,6 +15,7 @@ import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,13 +45,21 @@ import com.vueo.shared.core.storage.VueoBackupManager
 import com.vueo.tv.BuildConfig
 import com.vueo.tv.core.TvRuntime
 import com.vueo.tv.home.TiveoTopBarState
+import com.vueo.tv.profile.TvPinEntryOverlay
 import com.vueo.tv.ui.TvDesign
 import com.vueo.tv.ui.TvSidebarPreferences
 import com.vueo.tv.ui.TvSidebarStyle
 import com.vueo.tv.update.TvUpdateManager
 import com.vueo.tv.update.TvUpdateRelease
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.net.URI
+import java.security.MessageDigest
+import java.security.SecureRandom
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.PBEKeySpec
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -101,7 +111,7 @@ private val TvSettingsRootDestinations = listOf(
     TvSettingsRootDestination(TvSettingsPage.DEVELOPER_OPTIONS, "developer-options", "Developer options", "APP"),
 )
 
-private const val DEVELOPER_OPTIONS_ENABLED = "developer_options_enabled"
+private const val DEVELOPER_OPTIONS_PIN = "developer_options_pin"
 private const val HIDDEN_SETTINGS_CATEGORIES = "developer_hidden_settings_categories"
 
 private val HideableSettingsPages = setOf(
@@ -160,8 +170,30 @@ internal fun TvSettingsScreen(
     val preferences = remember(context) {
         context.applicationContext.getSharedPreferences("vueo_tv_browse", Context.MODE_PRIVATE)
     }
-    var developerOptionsEnabled by remember(preferences) {
-        mutableStateOf(preferences.getBoolean(DEVELOPER_OPTIONS_ENABLED, false))
+    var developerOptionsEnabled by remember { mutableStateOf(false) }
+    var pinRecord by remember(preferences) {
+        mutableStateOf(preferences.getString(DEVELOPER_OPTIONS_PIN, null))
+    }
+    var showPinEntry by remember { mutableStateOf(false) }
+    var firstPin by remember { mutableStateOf<String?>(null) }
+    var pinError by remember { mutableStateOf<String?>(null) }
+    var pinAttempt by remember { mutableIntStateOf(0) }
+    var pinJob by remember { mutableStateOf<Job?>(null) }
+    val pinScope = rememberCoroutineScope()
+
+    fun closePinEntry() {
+        pinJob?.cancel()
+        pinJob = null
+        showPinEntry = false
+        firstPin = null
+        pinError = null
+    }
+
+    LaunchedEffect(active) {
+        if (!active) {
+            closePinEntry()
+            developerOptionsEnabled = false
+        }
     }
     var hiddenCategories by remember(preferences) {
         mutableStateOf(preferences.getStringSet(HIDDEN_SETTINGS_CATEGORIES, emptySet()).orEmpty().toSet())
@@ -182,11 +214,6 @@ internal fun TvSettingsScreen(
 
     val selectedRoot = visibleRoots.firstOrNull { it.page == page.rootPage() } ?: visibleRoots.first()
     val visiblePage = if (page.rootPage() == selectedRoot.page) page else selectedRoot.page
-
-    fun setDeveloperOptions(enabled: Boolean) {
-        developerOptionsEnabled = enabled
-        preferences.edit().putBoolean(DEVELOPER_OPTIONS_ENABLED, enabled).apply()
-    }
 
     fun setCategoryHidden(id: String, hidden: Boolean) {
         val updated = if (hidden) hiddenCategories + id else hiddenCategories - id
@@ -304,7 +331,7 @@ internal fun TvSettingsScreen(
                         title = "Developer options",
                         subtitle = "Turn off to hide this menu. Press Build number 7 times to open it again.",
                         onActivate = {
-                            setDeveloperOptions(false)
+                            developerOptionsEnabled = false
                             openPanel(TvSettingsPage.ABOUT)
                         },
                         switchChecked = true,
@@ -354,8 +381,93 @@ internal fun TvSettingsScreen(
                 onProfile = onProfile,
                 onBack = onBack,
                 developerOptionsEnabled = developerOptionsEnabled,
-                onUnlockDeveloperOptions = { setDeveloperOptions(true) },
+                onUnlockDeveloperOptions = { showPinEntry = true },
             )
         }
+    }
+
+    if (active && showPinEntry) {
+        val existingRecord = pinRecord
+        val confirmation = firstPin
+        key(pinAttempt) {
+            TvPinEntryOverlay(
+                title = when {
+                    existingRecord != null -> "Unlock Developer options"
+                    confirmation != null -> "Confirm Developer PIN"
+                    else -> "Set Developer PIN"
+                },
+                subtitle = when {
+                    existingRecord != null -> "Enter your 4-digit PIN."
+                    confirmation != null -> "Enter the same PIN again."
+                    else -> "Choose a 4-digit PIN."
+                },
+                errorText = pinError,
+                onComplete = { pin ->
+                    when {
+                        existingRecord == null && confirmation == null -> {
+                            firstPin = pin
+                            pinError = null
+                            pinAttempt += 1
+                        }
+                        existingRecord == null && confirmation != pin -> {
+                            firstPin = null
+                            pinError = "PINs do not match. Try again."
+                            pinAttempt += 1
+                        }
+                        else -> {
+                            pinJob = pinScope.launch {
+                                val verifiedRecord = withContext(Dispatchers.Default) {
+                                    runCatching {
+                                        if (existingRecord == null) {
+                                            createDeveloperPinRecord(pin)
+                                        } else {
+                                            existingRecord.takeIf { verifyDeveloperPin(pin, it) }
+                                        }
+                                    }.getOrNull()
+                                }
+                                pinJob = null
+                                if (verifiedRecord == null) {
+                                    if (existingRecord == null) firstPin = null
+                                    pinError = if (existingRecord == null) "Could not set PIN. Try again." else "Incorrect PIN."
+                                    pinAttempt += 1
+                                } else {
+                                    if (existingRecord == null) {
+                                        preferences.edit().putString(DEVELOPER_OPTIONS_PIN, verifiedRecord).apply()
+                                        pinRecord = verifiedRecord
+                                    }
+                                    closePinEntry()
+                                    developerOptionsEnabled = true
+                                    openPanel(TvSettingsPage.DEVELOPER_OPTIONS)
+                                }
+                            }
+                        }
+                    }
+                },
+                onCancel = ::closePinEntry,
+            )
+        }
+    }
+}
+
+private fun createDeveloperPinRecord(pin: String): String {
+    val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
+    val hash = deriveDeveloperPin(pin, salt)
+    return Base64.encodeToString(salt, Base64.NO_WRAP) + ":" + Base64.encodeToString(hash, Base64.NO_WRAP)
+}
+
+private fun verifyDeveloperPin(pin: String, record: String): Boolean {
+    val parts = record.split(':', limit = 2)
+    if (parts.size != 2) return false
+    val salt = Base64.decode(parts[0], Base64.NO_WRAP)
+    val hash = Base64.decode(parts[1], Base64.NO_WRAP)
+    return MessageDigest.isEqual(hash, deriveDeveloperPin(pin, salt))
+}
+
+private fun deriveDeveloperPin(pin: String, salt: ByteArray): ByteArray {
+    val spec = PBEKeySpec(pin.toCharArray(), salt, 120_000, 256)
+    return try {
+        SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1").generateSecret(spec).encoded
+    } finally {
+        spec.clearPassword()
     }
 }

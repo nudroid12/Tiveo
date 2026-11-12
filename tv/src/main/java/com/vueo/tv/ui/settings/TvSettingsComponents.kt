@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ButtonDefaults
@@ -49,6 +50,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -178,6 +180,7 @@ internal fun TvSettingsMasterDetailShell(
         with(density) { (labelWidth + arrowWidth).toDp() } + 46.dp
     }
     val contentStartPadding = MODERN_HOME_CONTENT_START_PADDING
+    val categoryListState = rememberLazyListState()
     val categoryRequesters = remember { mutableMapOf<String, FocusRequester>() }
     categories.forEach { category -> categoryRequesters.getOrPut(category.id) { FocusRequester() } }
     val panelRequesters = remember { mutableMapOf<String, MutableMap<String, FocusRequester>>() }
@@ -237,9 +240,18 @@ internal fun TvSettingsMasterDetailShell(
 
     fun focusSelectedCategory(): Boolean {
         lastPane = "category"
-        return runCatching {
-            categoryRequesters.getValue(selectedCategoryId).requestFocus()
-        }.getOrDefault(false)
+        val requester = categoryRequesters.getValue(selectedCategoryId)
+        if (runCatching { requester.requestFocus() }.getOrDefault(false)) return true
+        val index = categories.indexOfFirst { it.id == selectedCategoryId }
+        if (index < 0) return false
+        shellScope.launch {
+            categoryListState.scrollToItem(index)
+            withFrameNanos { }
+            if (lastPane == "category" && !topBar.hasFocus) {
+                runCatching { requester.requestFocus() }
+            }
+        }
+        return true
     }
 
     fun focusPanel(): Boolean {
@@ -361,6 +373,7 @@ internal fun TvSettingsMasterDetailShell(
                 )
 
                 LazyColumn(
+                    state = categoryListState,
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                     modifier = Modifier.fillMaxWidth(),
                 ) {

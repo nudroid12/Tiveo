@@ -2,6 +2,11 @@ package com.vueo.tv.settings
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Extension
@@ -10,6 +15,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SettingsInputComponent
 import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -18,7 +24,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.vueo.shared.core.dna.UserDnaPreferences
 import com.vueo.shared.core.dna.UserDnaSnapshot
 import com.vueo.shared.core.extensions.CatalogDiscoveryCache
@@ -46,6 +57,7 @@ import com.vueo.tv.ui.TvSidebarPreferences
 import com.vueo.tv.ui.TvSidebarStyle
 import com.vueo.tv.update.TvUpdateManager
 import com.vueo.tv.update.TvUpdateRelease
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.net.URI
 import java.text.SimpleDateFormat
@@ -177,6 +189,13 @@ internal fun TvAboutSettings(
         ActivityResultContracts.StartActivityForResult(),
     ) { restoreSettingsFocus() }
     var buildNumberPresses by remember(developerOptionsEnabled) { mutableIntStateOf(0) }
+    var unlockNotice by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(unlockNotice) {
+        if (unlockNotice != null) {
+            delay(1600)
+            unlockNotice = null
+        }
+    }
     var checking by remember { mutableStateOf(false) }
     var downloading by remember { mutableStateOf(false) }
     var progress by remember { mutableIntStateOf(0) }
@@ -222,17 +241,22 @@ internal fun TvAboutSettings(
         TvSettingsEntry(
             id = "build-number",
             title = "Build number",
-            subtitle = when {
-                developerOptionsEnabled -> "Developer options are enabled."
-                buildNumberPresses == 6 -> "1 step away from enabling Developer options."
-                buildNumberPresses in 4..5 -> "${7 - buildNumberPresses} steps away from enabling Developer options."
-                else -> "Installed build."
-            },
+            subtitle = "Installed build.",
             value = BuildConfig.VERSION_CODE.toString(),
             onActivate = {
-                if (!developerOptionsEnabled) {
+                if (developerOptionsEnabled) {
+                    unlockNotice = "Developer options are already unlocked."
+                } else {
                     buildNumberPresses += 1
-                    if (buildNumberPresses == 7) onUnlockDeveloperOptions()
+                    when (val stepsLeft = 7 - buildNumberPresses) {
+                        0 -> {
+                            buildNumberPresses = 0
+                            unlockNotice = null
+                            onUnlockDeveloperOptions()
+                        }
+                        1 -> unlockNotice = "1 step away from Developer options."
+                        2, 3 -> unlockNotice = "$stepsLeft steps away from Developer options."
+                    }
                 }
             },
             section = "ABOUT",
@@ -256,5 +280,22 @@ internal fun TvAboutSettings(
             icon = Icons.Default.Refresh,
         ),
     )
-    TvSettingsListScreen("About Tiveo", "Version, updates and app information.", entries, onNavigate, onProfile, onBack)
+    Box(Modifier.fillMaxSize()) {
+        TvSettingsListScreen(
+            "About Tiveo", "Version, updates and app information.",
+            entries, onNavigate, onProfile, onBack,
+        )
+        unlockNotice?.let { notice ->
+            Text(
+                text = notice,
+                color = Color.White,
+                fontSize = 16.sp,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 48.dp)
+                    .background(Color(0xE6222222), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 24.dp, vertical = 12.dp),
+            )
+        }
+    }
 }
