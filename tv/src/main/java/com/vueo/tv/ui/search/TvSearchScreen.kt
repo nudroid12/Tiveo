@@ -80,11 +80,9 @@ import com.vueo.tv.ui.TvNetworkImage
 import com.vueo.tv.ui.TvPosterActionDialog
 import com.vueo.tv.ui.tvPosterActivation
 import com.vueo.tv.ui.motion.TvMotion
-import com.vueo.tv.ui.TvPrimaryDestinations
-import com.vueo.tv.ui.TvSidebar
-import com.vueo.tv.ui.tvSidebarContentStartPadding
-import com.vueo.tv.ui.tvSidebarIsPillMode
-import com.vueo.tv.ui.tvSidebarIsHiddenClassic
+import com.vueo.tv.home.MODERN_HOME_CONTENT_START_PADDING
+import com.vueo.tv.home.TiveoPageTopBar
+import com.vueo.tv.home.TiveoTopBarHeight
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -95,7 +93,6 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 private const val SEARCH_COLUMNS = 6
-private const val FLOATING_SEARCH_COLUMNS = 7
 private val SEARCH_FOCUS_PAINT_INSET = 8.dp
 
 internal enum class TvSearchTypeFilter(val label: String) {
@@ -218,8 +215,6 @@ internal fun TvSearchScreen(
     val typeRequester = remember { FocusRequester() }
     val sortRequester = remember { FocusRequester() }
     val genreRequester = remember { FocusRequester() }
-    val navRequesters = remember { TvPrimaryDestinations.associateWith { FocusRequester() } }
-    val profileRequester = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(active, navExpanded) {
@@ -452,12 +447,11 @@ internal fun TvSearchScreen(
     val resultRequesterCache = remember(resultKeys, session.mode) { mutableMapOf<String, FocusRequester>() }
     val resultFocusJob = remember { arrayOfNulls<Job>(1) }
 
-    fun focusSidebar() {
+    fun focusTopBar() {
         // Cancel any pending poster focus before handing focus to Topbar/Sidebar.
         resultFocusJob[0]?.cancel()
         initialContentFocusHandled = true
         navExpanded = true
-        // TvSidebar waits for its expanded focus node; never target the hidden proxy.
     }
 
     fun resetGridForFilterChange() {
@@ -537,34 +531,29 @@ internal fun TvSearchScreen(
         PerformanceDiagnostics.captureRuntimeEvent(
             "TV_TAB_BACK tab=Search action=${if (navExpanded) "home" else "open_navigation"}"
         )
-        if (navExpanded) onBack() else focusSidebar()
+        if (navExpanded) onBack() else focusTopBar()
     }
 
-    val contentStartPadding = tvSidebarContentStartPadding(96.dp)
-    val floatingPillMode = tvSidebarIsPillMode()
-    val fullWidthContent = floatingPillMode || tvSidebarIsHiddenClassic()
-    val searchColumns = if (fullWidthContent) FLOATING_SEARCH_COLUMNS else SEARCH_COLUMNS
-    val gridEndPadding = if (fullWidthContent) 28.dp else 52.dp
+    val contentStartPadding = MODERN_HOME_CONTENT_START_PADDING
 
     Box(Modifier.fillMaxSize().background(TvDesign.Black)) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(top = 46.dp),
+                .padding(top = TiveoTopBarHeight + 10.dp),
         ) {
             Column(
-                modifier = Modifier.padding(start = contentStartPadding, end = 52.dp),
+                modifier = Modifier.padding(horizontal = contentStartPadding),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
                     text = "Search",
-                    modifier = Modifier.padding(start = 16.dp),
                     color = TvDesign.White,
                     fontSize = 30.sp,
                     fontWeight = FontWeight.Bold,
                 )
 
-                Box(modifier = Modifier.fillMaxWidth(.76f)) {
+                Box(modifier = Modifier.fillMaxWidth(.82f)) {
                     TvMobileSearchField(
                         value = session.query,
                         mode = session.mode,
@@ -593,10 +582,10 @@ internal fun TvSearchScreen(
                             }
                         },
                         onLeftWhenEmpty = {
-                            focusSidebar()
+                            focusTopBar()
                         },
                         onRight = { runCatching { modeRequester.requestFocus() } },
-                        onUp = {},
+                        onUp = ::focusTopBar,
                         onDown = { runCatching { typeRequester.requestFocus() } },
                     )
                 }
@@ -604,7 +593,7 @@ internal fun TvSearchScreen(
                 if (searching || contentDiscovering) {
                     LinearProgressIndicator(
                         modifier = Modifier
-                            .fillMaxWidth(.76f)
+                            .fillMaxWidth(.82f)
                             .height(1.dp),
                         color = TvDesign.White.copy(alpha = .90f),
                         trackColor = TvDesign.White.copy(alpha = .08f),
@@ -657,7 +646,7 @@ internal fun TvSearchScreen(
                                 )
                             },
                             onLeft = {
-                                focusSidebar()
+                                focusTopBar()
                             },
                             onRight = { runCatching { sortRequester.requestFocus() } },
                             onUp = { runCatching { fieldRequester.requestFocus() } },
@@ -779,12 +768,12 @@ internal fun TvSearchScreen(
 
                 filteredItems.isNotEmpty() -> {
                     LazyVerticalGrid(
-                        columns = GridCells.Fixed(searchColumns),
+                        columns = GridCells.Fixed(SEARCH_COLUMNS),
                         state = gridState,
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(
                             start = contentStartPadding,
-                            end = gridEndPadding,
+                            end = contentStartPadding,
                             top = SEARCH_FOCUS_PAINT_INSET,
                             bottom = 36.dp + SEARCH_FOCUS_PAINT_INSET,
                         ),
@@ -814,16 +803,16 @@ internal fun TvSearchScreen(
                                     onOpenMedia(item)
                                 },
                                 onLongClick = { actionMedia = item },
-                                onUpFromFirstRow = if (index < searchColumns) {
+                                onUpFromFirstRow = if (index < SEARCH_COLUMNS) {
                                     { runCatching { typeRequester.requestFocus() } }
                                 } else null,
-                                onLeftFromFirstColumn = if (index % searchColumns == 0) {
+                                onLeftFromFirstColumn = if (index % SEARCH_COLUMNS == 0) {
                                     {
-                                        focusSidebar()
+                                        focusTopBar()
                                     }
                                 } else null,
                                 blockRight =
-                                    index % searchColumns == searchColumns - 1 || index == filteredItems.lastIndex,
+                                    index % SEARCH_COLUMNS == SEARCH_COLUMNS - 1 || index == filteredItems.lastIndex,
                             )
                         }
                     }
@@ -841,11 +830,10 @@ internal fun TvSearchScreen(
             }
         }
 
-        TvSidebar(
+        TiveoPageTopBar(
             selected = "Search",
-            expanded = navExpanded,
-            navRequesters = navRequesters,
-            profileRequester = profileRequester,
+            active = active && choiceDialog == null && actionMedia == null,
+            navigationFocused = navExpanded,
             onFocused = {
                 if (active && navExpanded) {
                     PerformanceDiagnostics.captureRuntimeEvent("TV_TAB_NAV_FOCUS tab=Search")
@@ -855,21 +843,19 @@ internal fun TvSearchScreen(
             onProfile = onProfile,
             onReturnToContent = {
                 navExpanded = false
-                runCatching {
-                    when {
-                        lastContentTarget == "type" -> typeRequester.requestFocus()
-                        lastContentTarget == "sort" -> sortRequester.requestFocus()
-                        lastContentTarget == "genre" -> genreRequester.requestFocus()
-                        lastContentTarget == "mode" -> modeRequester.requestFocus()
-                        lastContentTarget.startsWith("result:") -> {
-                            val key = lastContentTarget.removePrefix("result:")
-                            resultRequesterCache[key]?.requestFocus() ?: fieldRequester.requestFocus()
-                        }
-                        else -> fieldRequester.requestFocus()
-                    }
-                }.isSuccess
+                val requester = when {
+                    lastContentTarget == "type" -> typeRequester
+                    lastContentTarget == "sort" -> sortRequester
+                    lastContentTarget == "genre" -> genreRequester
+                    lastContentTarget == "mode" -> modeRequester
+                    lastContentTarget.startsWith("result:") ->
+                        resultRequesterCache[lastContentTarget.removePrefix("result:")]
+                    else -> fieldRequester
+                }
+                val restored = runCatching { requester?.requestFocus() == true }.getOrDefault(false)
+                if (!restored) fieldRequester.requestFocus()
             },
-            modifier = Modifier.align(Alignment.CenterStart),
+            modifier = Modifier.align(Alignment.TopStart),
         )
 
         choiceDialog?.let { dialog ->
@@ -1000,7 +986,7 @@ private fun TvMobileSearchField(
             onFocused = onModeFocused,
             onModeChange = onModeChange,
             onLeft = { runCatching { requester.requestFocus() } },
-            onUp = { runCatching { requester.requestFocus() } },
+            onUp = onUp,
             onDown = onDown,
         )
     }

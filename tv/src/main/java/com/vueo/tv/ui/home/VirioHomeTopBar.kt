@@ -12,10 +12,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,6 +39,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.vueo.tv.R
 
+internal val TiveoTopBarHeight = 64.dp
+
 private val VirioHomeTabs = listOf("Home", "Search", "Library", "Settings", "Profile")
 
 @Composable
@@ -48,15 +52,16 @@ internal fun VirioHomeTopBar(
     onNavigate: (String) -> Unit,
     onProfile: () -> Unit,
     modifier: Modifier = Modifier,
+    selected: String = "Home",
 ) {
-    val requesters = remember(homeRequester) {
-        VirioHomeTabs.map { if (it == "Home") homeRequester else FocusRequester() }
+    val requesters = remember(homeRequester, selected) {
+        VirioHomeTabs.map { if (it == selected) homeRequester else FocusRequester() }
     }
     Row(
         modifier = modifier
             .fillMaxWidth()
             .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = .92f), Color.Transparent)))
-            .height(64.dp)
+            .height(TiveoTopBarHeight)
             .padding(horizontal = MODERN_HOME_CONTENT_START_PADDING),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -68,16 +73,16 @@ internal fun VirioHomeTopBar(
         )
         VirioHomeTabs.forEachIndexed { index, destination ->
             var focused by remember(destination) { mutableStateOf(false) }
-            val home = destination == "Home"
+            val isSelected = destination == selected
             Text(
                 text = if (destination == "Library") "My List" else destination,
                 color = when {
                     focused -> Color.Black
-                    home -> Color.White
+                    isSelected -> Color.White
                     else -> Color.White.copy(alpha = .76f)
                 },
                 fontSize = 14.sp,
-                fontWeight = if (home || focused) FontWeight.Bold else FontWeight.Medium,
+                fontWeight = if (isSelected || focused) FontWeight.Bold else FontWeight.Medium,
                 maxLines = 1,
                 softWrap = false,
                 modifier = Modifier
@@ -102,7 +107,7 @@ internal fun VirioHomeTopBar(
                     .background(if (focused) Color.White else Color.Transparent)
                     .clickable(role = Role.Button) {
                         when (destination) {
-                            "Home" -> onReturnToContent()
+                            selected -> onReturnToContent()
                             "Profile" -> onProfile()
                             else -> onNavigate(destination)
                         }
@@ -111,4 +116,35 @@ internal fun VirioHomeTopBar(
             )
         }
     }
+}
+
+@Composable
+internal fun TiveoPageTopBar(
+    selected: String,
+    active: Boolean,
+    navigationFocused: Boolean,
+    onFocused: () -> Unit,
+    onReturnToContent: () -> Unit,
+    onNavigate: (String) -> Unit,
+    onProfile: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val selectedRequester = remember { FocusRequester() }
+    val canFocus = active && navigationFocused
+    LaunchedEffect(canFocus, selected) {
+        if (canFocus) {
+            withFrameNanos { }
+            selectedRequester.requestFocus()
+        }
+    }
+    VirioHomeTopBar(
+        homeRequester = selectedRequester,
+        canFocus = canFocus,
+        onFocused = onFocused,
+        onReturnToContent = onReturnToContent,
+        onNavigate = onNavigate,
+        onProfile = onProfile,
+        modifier = modifier,
+        selected = selected,
+    )
 }

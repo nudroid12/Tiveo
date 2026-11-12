@@ -74,9 +74,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.vueo.tv.ui.TvDesign
-import com.vueo.tv.ui.TvPrimaryDestinations
-import com.vueo.tv.ui.TvSidebar
-import com.vueo.tv.ui.tvSidebarContentStartPadding
+import com.vueo.tv.home.MODERN_HOME_CONTENT_START_PADDING
+import com.vueo.tv.home.TiveoPageTopBar
+import com.vueo.tv.home.TiveoTopBarHeight
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -176,9 +176,7 @@ internal fun TvSettingsMasterDetailShell(
         val arrowWidth = textMeasurer.measure("›", style = arrowTextStyle, maxLines = 1).size.width
         with(density) { (labelWidth + arrowWidth).toDp() } + 46.dp
     }
-    val contentStartPadding = tvSidebarContentStartPadding(100.dp)
-    val navRequesters = remember { TvPrimaryDestinations.associateWith { FocusRequester() } }
-    val profileRequester = remember { FocusRequester() }
+    val contentStartPadding = MODERN_HOME_CONTENT_START_PADDING
     val categoryRequesters = remember(categories.map { it.id }) {
         categories.associate { it.id to FocusRequester() }
     }
@@ -188,7 +186,7 @@ internal fun TvSettingsMasterDetailShell(
     val panelFocusableRowIds = remember { mutableMapOf<String, List<String>>() }
     var lastPane by remember { mutableStateOf("category") }
     var navExpanded by remember { mutableStateOf(false) }
-    var sidebarFocusIntent by remember { mutableStateOf(false) }
+    var navigationFocusIntent by remember { mutableStateOf(false) }
     // Back's exit step belongs to user intent, not transient focus callbacks.
     var backExitPending by remember { mutableStateOf(false) }
     var categorySelectJob by remember { mutableStateOf<Job?>(null) }
@@ -236,14 +234,12 @@ internal fun TvSettingsMasterDetailShell(
     fun focusGlobalNav() {
         categorySelectJob?.cancel()
         panelRestoreJob?.cancel()
-        sidebarFocusIntent = true
-        // Requesting a collapsed Topbar node races its expanded composition.
-        // TvSidebar retries the real expanded destination on following frames.
+        navigationFocusIntent = true
         navExpanded = true
     }
 
     fun focusSelectedCategory(): Boolean {
-        sidebarFocusIntent = false
+        navigationFocusIntent = false
         navExpanded = false
         val focused = runCatching {
             categoryRequesters.getValue(selectedCategoryId).requestFocus()
@@ -254,7 +250,7 @@ internal fun TvSettingsMasterDetailShell(
 
     fun focusPanel(): Boolean {
         categorySelectJob?.cancel()
-        sidebarFocusIntent = false
+        navigationFocusIntent = false
         navExpanded = false
         val rowId = panelFocusTargetId(panelKey) ?: return false
         val requester = requesterForPanelRow(panelKey, rowId)
@@ -274,12 +270,12 @@ internal fun TvSettingsMasterDetailShell(
             // focus back after the user intentionally moved to categories/sidebar.
             for (waitMs in listOf(24L, 48L, 90L, 140L)) {
                 delay(waitMs)
-                if (!active || sidebarFocusIntent || lastPane != "panel") return@launch
+                if (!active || navigationFocusIntent || lastPane != "panel") return@launch
                 if (focusPanel()) return@launch
             }
             // Empty panels still need a deterministic escape target. Only fall back
             // after the full retry window, never during a normal panel transition.
-            if (active && !sidebarFocusIntent && lastPane == "panel" && panelFocusableRowIds[panelKey].isNullOrEmpty()) {
+            if (active && !navigationFocusIntent && lastPane == "panel" && panelFocusableRowIds[panelKey].isNullOrEmpty()) {
                 focusSelectedCategory()
             }
         }
@@ -315,13 +311,13 @@ internal fun TvSettingsMasterDetailShell(
         }
         delay(90)
         // Back may have already opened navigation during the entry delay.
-        if (!sidebarFocusIntent && !navExpanded) {
+        if (!navigationFocusIntent && !navExpanded) {
             runCatching { categoryRequesters.getValue(selectedCategoryId).requestFocus() }
         }
     }
 
     LaunchedEffect(panelAutoFocusToken, active) {
-        if (!active || sidebarFocusIntent || panelAutoFocusToken <= 0) return@LaunchedEffect
+        if (!active || navigationFocusIntent || panelAutoFocusToken <= 0) return@LaunchedEffect
 
         // Opening/backing between Settings panels keeps ownership in the panel.
         // The destination rows publish asynchronously, so use the shared retry path.
@@ -348,10 +344,15 @@ internal fun TvSettingsMasterDetailShell(
                     }
                     false
                 }
-                .padding(start = contentStartPadding, end = 42.dp, top = 34.dp, bottom = 28.dp)
-                .background(TvDesign.Surface.copy(alpha = .18f), RoundedCornerShape(22.dp))
-                .border(1.dp, TvDesign.White.copy(alpha = .12f), RoundedCornerShape(22.dp))
-                .padding(20.dp),
+                .padding(
+                    start = contentStartPadding,
+                    end = contentStartPadding,
+                    top = TiveoTopBarHeight + 10.dp,
+                    bottom = 28.dp,
+                )
+                .background(TvDesign.Surface.copy(alpha = .28f), RoundedCornerShape(12.dp))
+                .border(1.dp, TvDesign.White.copy(alpha = .12f), RoundedCornerShape(12.dp))
+                .padding(16.dp),
         ) {
             Column(
                 modifier = Modifier
@@ -379,7 +380,7 @@ internal fun TvSettingsMasterDetailShell(
                                 grouped = false,
                                 requester = categoryRequesters.getValue(category.id),
                                 onFocused = categoryFocused@{
-                                    if (!active || sidebarFocusIntent) return@categoryFocused
+                                    if (!active || navigationFocusIntent) return@categoryFocused
                                     navExpanded = false
                                     if (lastPane == "panel") {
                                         // During panel replacement Compose may momentarily
@@ -398,7 +399,7 @@ internal fun TvSettingsMasterDetailShell(
                                             delay(90L)
                                             if (
                                                 active && lastPane == "category" &&
-                                                !sidebarFocusIntent
+                                                !navigationFocusIntent
                                             ) {
                                                 onCategorySelected(category.id)
                                             }
@@ -412,10 +413,14 @@ internal fun TvSettingsMasterDetailShell(
                                     focusPanel()
                                 },
                                 onUp = {
-                                    if (index <= 0) true else runCatching {
-                                        categoryRequesters.getValue(categories[index - 1].id).requestFocus()
+                                    if (index == 0) {
+                                        focusGlobalNav()
                                         true
-                                    }.getOrDefault(false)
+                                    } else {
+                                        runCatching {
+                                            categoryRequesters.getValue(categories[index - 1].id).requestFocus()
+                                        }.getOrDefault(false)
+                                    }
                                 },
                                 onDown = {
                                     if (index >= categories.lastIndex) true else runCatching {
@@ -443,7 +448,7 @@ internal fun TvSettingsMasterDetailShell(
                     onLeftToCategory = { focusSelectedCategory() },
                     onRowFocused = { rowId ->
                         panelLastFocusedIds[panelKey] = rowId
-                        if (active && !sidebarFocusIntent) {
+                        if (active && !navigationFocusIntent) {
                             navExpanded = false
                             lastPane = "panel"
                         }
@@ -465,30 +470,21 @@ internal fun TvSettingsMasterDetailShell(
             }
         }
 
-        TvSidebar(
+        TiveoPageTopBar(
             selected = "Settings",
-            expanded = navExpanded,
-            navRequesters = navRequesters,
-            profileRequester = profileRequester,
-            onFocused = navigationFocused@{
-                if (!active) return@navigationFocused
-                if (sidebarFocusIntent) {
-                    navExpanded = true
-                    PerformanceDiagnostics.captureRuntimeEvent("TV_TAB_NAV_FOCUS tab=Settings")
-                } else if (lastPane == "panel") {
-                    requestDeferredPanelRestore()
-                } else {
-                    focusSelectedCategory()
-                }
+            active = active,
+            navigationFocused = navExpanded,
+            onFocused = {
+                PerformanceDiagnostics.captureRuntimeEvent("TV_TAB_NAV_FOCUS tab=Settings")
             },
             onNavigate = onNavigate,
             onProfile = onProfile,
             onReturnToContent = {
                 backExitPending = false
-                sidebarFocusIntent = false
-                if (lastPane == "panel") focusPanel() else focusSelectedCategory()
+                navigationFocusIntent = false
+                if (lastPane != "panel" || !focusPanel()) focusSelectedCategory()
             },
-            modifier = Modifier.align(Alignment.CenterStart),
+            modifier = Modifier.align(Alignment.TopStart),
         )
     }
 }
@@ -897,9 +893,7 @@ internal fun TvSettingsListScreen(
     val accountHeader = title == "Account" && entries.any { it.id == "sync-now" }
     val accountHeaderIds = setOf("status", "message", "sync-all", "sync-now", "sign-out", "cancel-sign-out")
 
-    val contentStartPadding = tvSidebarContentStartPadding(112.dp)
-    val navRequesters = remember { TvPrimaryDestinations.associateWith { FocusRequester() } }
-    val profileRequester = remember { FocusRequester() }
+    val contentStartPadding = MODERN_HOME_CONTENT_START_PADDING
     val rowRequesters = remember { mutableMapOf<String, FocusRequester>() }
     entries.forEach { entry -> rowRequesters.getOrPut(entry.id) { FocusRequester() } }
     val focusableIds = entries.filter { it.enabled }.map { it.id }
@@ -908,10 +902,9 @@ internal fun TvSettingsListScreen(
     var lastFocusedId by remember { mutableStateOf(firstFocusable?.id.orEmpty()) }
     var previousFocusableIds by remember { mutableStateOf(focusableIds) }
     var navExpanded by remember { mutableStateOf(false) }
-    var sidebarFocusIntent by remember { mutableStateOf(false) }
 
-    LaunchedEffect(focusableIds, preferredFocusId) {
-        if (focusableIds.isEmpty()) return@LaunchedEffect
+    LaunchedEffect(focusableIds, preferredFocusId, navExpanded) {
+        if (navExpanded || focusableIds.isEmpty()) return@LaunchedEffect
 
         preferredFocusId?.takeIf { it in focusableIds }?.let { lastFocusedId = it }
 
@@ -931,13 +924,10 @@ internal fun TvSettingsListScreen(
     }
 
     fun focusSettingsNav() {
-        sidebarFocusIntent = true
         navExpanded = true
-        runCatching { navRequesters.getValue("Settings").requestFocus() }
     }
 
     fun restoreContentFocus(): Boolean {
-        sidebarFocusIntent = false
         navExpanded = false
         val targetId = lastFocusedId.takeIf { it in focusableIds } ?: focusableIds.firstOrNull() ?: return false
         val requester = rowRequesters[targetId] ?: return false
@@ -953,7 +943,12 @@ internal fun TvSettingsListScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(start = contentStartPadding, end = 48.dp, top = 38.dp, bottom = 28.dp),
+                .padding(
+                    start = contentStartPadding,
+                    end = contentStartPadding,
+                    top = TiveoTopBarHeight + 10.dp,
+                    bottom = 28.dp,
+                ),
         ) {
             if (!topLabel.isNullOrBlank()) {
                 Text(
@@ -1053,18 +1048,15 @@ internal fun TvSettingsListScreen(
             }
         }
 
-        TvSidebar(
+        TiveoPageTopBar(
             selected = "Settings",
-            expanded = navExpanded,
-            navRequesters = navRequesters,
-            profileRequester = profileRequester,
-            onFocused = {
-                if (sidebarFocusIntent) navExpanded = true else restoreContentFocus()
-            },
+            active = true,
+            navigationFocused = navExpanded,
+            onFocused = {},
             onNavigate = onNavigate,
             onProfile = onProfile,
-            onReturnToContent = ::restoreContentFocus,
-            modifier = Modifier.align(Alignment.CenterStart),
+            onReturnToContent = { restoreContentFocus() },
+            modifier = Modifier.align(Alignment.TopStart),
         )
     }
 }
