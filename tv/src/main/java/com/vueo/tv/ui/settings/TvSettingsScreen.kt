@@ -288,6 +288,7 @@ internal fun TvSettingsScreen(
         panelKey = visiblePage.name,
         panelAutoFocusToken = panelAutoFocusToken,
         panelHasBack = visiblePage.hasPanelParent(),
+        pinDialogOpen = showPinChoice || pinStep != null,
         bottomNotice = unlockNotice.takeIf { active && visiblePage == TvSettingsPage.ABOUT },
         onCategorySelected = { id ->
             visibleRoots.firstOrNull { it.id == id }?.let { destination ->

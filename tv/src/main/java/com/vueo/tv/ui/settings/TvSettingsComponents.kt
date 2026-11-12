@@ -48,6 +48,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -73,6 +74,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -80,6 +82,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.vueo.tv.ui.TvBottomNotice
 import com.vueo.tv.ui.TvDesign
 import com.vueo.tv.home.MODERN_HOME_CONTENT_START_PADDING
 import com.vueo.tv.home.TiveoPageContentFocus
@@ -151,6 +154,7 @@ internal fun TvSettingsMasterDetailShell(
     panelKey: String,
     panelAutoFocusToken: Int,
     panelHasBack: Boolean,
+    pinDialogOpen: Boolean,
     bottomNotice: String?,
     onCategorySelected: (String) -> Unit,
     onCategoryOpened: (String) -> Unit,
@@ -192,6 +196,10 @@ internal fun TvSettingsMasterDetailShell(
     var panelRestoreJob by remember { mutableStateOf<Job?>(null) }
     val shellScope = rememberCoroutineScope()
     val currentPanelKey by rememberUpdatedState(panelKey)
+    val panelFocusReady = active && !pinDialogOpen && LocalWindowInfo.current.isWindowFocused
+    val currentPanelFocusReady by rememberUpdatedState(panelFocusReady)
+    var appliedPanelFocusToken by remember { mutableIntStateOf(0) }
+    val explicitPanelFocusPending = panelAutoFocusToken > appliedPanelFocusToken
 
     fun requesterForPanelRow(key: String, rowId: String): FocusRequester =
         panelRequesters.getOrPut(key) { mutableMapOf() }.getOrPut(rowId) { FocusRequester() }
@@ -239,6 +247,7 @@ internal fun TvSettingsMasterDetailShell(
 
     fun focusSelectedCategory(): Boolean {
         panelRestoreJob?.cancel()
+        appliedPanelFocusToken = panelAutoFocusToken
         lastPane = "category"
         val requester = categoryRequesters.getValue(selectedCategoryId)
         if (runCatching { requester.requestFocus() }.getOrDefault(false)) return true
@@ -255,18 +264,20 @@ internal fun TvSettingsMasterDetailShell(
     }
 
     fun focusPanel(): Boolean {
+        if (!currentPanelFocusReady || panelKey != currentPanelKey) return false
         categorySelectJob?.cancel()
-        val rowId = panelFocusTargetId(panelKey) ?: return false
-        val requester = requesterForPanelRow(panelKey, rowId)
-        val focused = runCatching { requester.requestFocus() }.getOrDefault(false)
-        if (focused) {
-            panelLastFocusedIds[panelKey] = rowId
-            lastPane = "panel"
-        }
-        return focused
+        val target = panelFocusTargetId(panelKey) ?: return false
+        val first = panelFirstRowIds[panelKey]
+        val rowId = listOfNotNull(target, first).distinct().firstOrNull { id ->
+            runCatching { requesterForPanelRow(panelKey, id).requestFocus() }.getOrDefault(false)
+        } ?: return false
+        panelLastFocusedIds[panelKey] = rowId
+        lastPane = "panel"
+        appliedPanelFocusToken = panelAutoFocusToken
+        return true
     }
 
-    fun requestDeferredPanelRestore() {
+    fun requestDeferredPanelRestore(explicit: Boolean = false) {
         panelRestoreJob?.cancel()
         panelRestoreJob = shellScope.launch {
             // A panel replacement can temporarily leave the focused row detached.
@@ -274,11 +285,13 @@ internal fun TvSettingsMasterDetailShell(
             // focus back after the user intentionally moved to categories/sidebar.
             for (waitMs in listOf(24L, 48L, 90L, 140L)) {
                 delay(waitMs)
-                if (!active || topBar.hasFocus || lastPane != "panel" || panelKey != currentPanelKey) return@launch
+                if (!currentPanelFocusReady || (!explicit && topBar.hasFocus) ||
+                    lastPane != "panel" || panelKey != currentPanelKey
+                ) return@launch
                 if (focusPanel()) return@launch
             }
             // The saved row can also be off-screen or detached after a panel refresh.
-            if (active && !topBar.hasFocus && lastPane == "panel" && panelKey == currentPanelKey) {
+            if (currentPanelFocusReady && !topBar.hasFocus && lastPane == "panel" && panelKey == currentPanelKey) {
                 focusSelectedCategory()
             }
         }
@@ -319,13 +332,12 @@ internal fun TvSettingsMasterDetailShell(
         }
     }
 
-    LaunchedEffect(panelAutoFocusToken, active) {
-        if (!active || topBar.hasFocus || panelAutoFocusToken <= 0) return@LaunchedEffect
+    LaunchedEffect(panelAutoFocusToken, panelFocusReady) {
+        if (!panelFocusReady || !explicitPanelFocusPending) return@LaunchedEffect
 
-        // Opening/backing between Settings panels keeps ownership in the panel.
-        // The destination rows publish asynchronously, so use the shared retry path.
+        // Keep the handoff pending while the PIN dialog owns the window.
         lastPane = "panel"
-        requestDeferredPanelRestore()
+        requestDeferredPanelRestore(explicit = true)
     }
 
     Box(
@@ -381,6 +393,7 @@ internal fun TvSettingsMasterDetailShell(
                                 requester = categoryRequesters.getValue(category.id),
                                 onFocused = categoryFocused@{
                                     if (!active || topBar.hasFocus) return@categoryFocused
+                                    if (explicitPanelFocusPending) return@categoryFocused
                                     if (lastPane == "panel") {
                                         // During panel replacement Compose may momentarily
                                         // fall back into the category column. That is not a
@@ -449,9 +462,9 @@ internal fun TvSettingsMasterDetailShell(
                         updatePanelFocusableRows(panelKey, rowIds, preferredFocusId)
                     },
                     restorePanelFocus = {
-                        if (lastPane == "panel") focusPanel() else false
+                        if (lastPane == "panel" && !explicitPanelFocusPending) focusPanel() else false
                     },
-                    requestDeferredPanelRestore = ::requestDeferredPanelRestore,
+                    requestDeferredPanelRestore = { requestDeferredPanelRestore() },
                     onLeftToCategory = { focusSelectedCategory() },
                     onRowFocused = { rowId ->
                         panelLastFocusedIds[panelKey] = rowId
@@ -479,23 +492,18 @@ internal fun TvSettingsMasterDetailShell(
             active = active,
             onReturnToContent = {
                 backExitPending = false
-                if (lastPane != "panel" || !focusPanel()) focusSelectedCategory()
+                if (explicitPanelFocusPending) {
+                    if (panelFocusReady) {
+                        lastPane = "panel"
+                        requestDeferredPanelRestore(explicit = true)
+                    }
+                } else if (lastPane != "panel" || !focusPanel()) {
+                    focusSelectedCategory()
+                }
             },
         )
 
-        bottomNotice?.let { notice ->
-            Text(
-                text = notice,
-                color = TvDesign.White,
-                fontSize = 16.sp,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(horizontal = 24.dp)
-                    .padding(bottom = 34.dp)
-                    .background(TvDesign.SurfaceRaised.copy(alpha = .96f), RoundedCornerShape(percent = 50))
-                    .padding(horizontal = 24.dp, vertical = 9.dp),
-            )
-        }
+        bottomNotice?.let { TvBottomNotice(it) }
     }
 }
 

@@ -7,24 +7,17 @@ import android.os.Looper
 import android.os.SystemClock
 import android.view.KeyEvent
 import com.vueo.tv.settings.TvMotionBackShortcut
+import com.vueo.tv.ui.TvBottomNotice
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.vueo.tv.watchnext.TvWatchNextDeepLink
 import com.vueo.tv.watchnext.TvWatchNextPublisher
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.vueo.shared.core.diagnostics.RuntimeDiagnostics
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -70,16 +63,7 @@ class MainActivity : ComponentActivity() {
                     },
                 )
                 if (showExitPrompt) {
-                    Text(
-                        text = "Press Back again to exit",
-                        color = Color.White,
-                        fontSize = 16.sp,
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 48.dp)
-                            .background(Color(0xE6222222), RoundedCornerShape(12.dp))
-                            .padding(horizontal = 24.dp, vertical = 12.dp),
-                    )
+                    TvBottomNotice("Press Back again to exit")
                 }
             }
         }
