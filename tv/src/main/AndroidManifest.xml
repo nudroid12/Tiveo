@@ -16,14 +16,16 @@
         android:name="com.vueo.shared.core.diagnostics.TiveoApplication"
         android:allowBackup="false"
         android:banner="@drawable/vueo_tv_banner_art"
-        android:icon="@mipmap/virio_launcher"
+        android:icon="@drawable/tiveo_tv_installer_icon"
         android:label="Tiveo"
         android:logo="@drawable/vueo_tv_logo"
-        android:roundIcon="@mipmap/virio_launcher_round"
+        android:roundIcon="@drawable/tiveo_tv_installer_icon_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.VUEOTV">
         <activity
             android:name=".MainActivity"
+            android:icon="@drawable/tiveo_tv_installer_icon"
+            android:roundIcon="@drawable/tiveo_tv_installer_icon_round"
             android:configChanges="keyboardHidden|orientation|screenSize"
             android:exported="true"
             android:label="Tiveo"
