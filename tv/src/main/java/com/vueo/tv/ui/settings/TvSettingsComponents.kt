@@ -156,6 +156,7 @@ internal fun TvSettingsMasterDetailShell(
     panelKey: String,
     panelAutoFocusToken: Int,
     panelHasBack: Boolean,
+    bottomNotice: String?,
     onCategorySelected: (String) -> Unit,
     onPanelBack: () -> Unit,
     topBar: TiveoTopBarState,
@@ -483,6 +484,20 @@ internal fun TvSettingsMasterDetailShell(
                 if (lastPane != "panel" || !focusPanel()) focusSelectedCategory()
             },
         )
+
+        bottomNotice?.let { notice ->
+            Text(
+                text = notice,
+                color = Color.White,
+                fontSize = 16.sp,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 24.dp)
+                    .padding(bottom = 34.dp)
+                    .background(Color(0xF0202020), RoundedCornerShape(percent = 50))
+                    .padding(horizontal = 24.dp, vertical = 9.dp),
+            )
+        }
     }
 }
 

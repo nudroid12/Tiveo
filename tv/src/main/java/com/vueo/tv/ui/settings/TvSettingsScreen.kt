@@ -53,6 +53,7 @@ import com.vueo.tv.update.TvUpdateManager
 import com.vueo.tv.update.TvUpdateRelease
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.URI
@@ -183,6 +184,7 @@ internal fun TvSettingsScreen(
     var showPinChoice by remember { mutableStateOf(false) }
     var pinStep by remember { mutableStateOf<DeveloperPinStep?>(null) }
     var firstPin by remember { mutableStateOf<String?>(null) }
+    var unlockNotice by remember { mutableStateOf<String?>(null) }
     var pinError by remember { mutableStateOf<String?>(null) }
     var pinAttempt by remember { mutableIntStateOf(0) }
     var pinJob by remember { mutableStateOf<Job?>(null) }
@@ -222,6 +224,13 @@ internal fun TvSettingsScreen(
 
     val selectedRoot = visibleRoots.firstOrNull { it.page == page.rootPage() } ?: visibleRoots.first()
     val visiblePage = if (page.rootPage() == selectedRoot.page) page else selectedRoot.page
+
+    LaunchedEffect(active, visiblePage, unlockNotice) {
+        if (active && visiblePage == TvSettingsPage.ABOUT && unlockNotice != null) {
+            delay(1600)
+        }
+        unlockNotice = null
+    }
 
     fun setCategoryHidden(id: String, hidden: Boolean) {
         val updated = if (hidden) hiddenCategories + id else hiddenCategories - id
@@ -279,6 +288,7 @@ internal fun TvSettingsScreen(
         panelKey = visiblePage.name,
         panelAutoFocusToken = panelAutoFocusToken,
         panelHasBack = visiblePage.hasPanelParent(),
+        bottomNotice = unlockNotice.takeIf { active && visiblePage == TvSettingsPage.ABOUT },
         onCategorySelected = { id ->
             visibleRoots.firstOrNull { it.id == id }?.let { destination ->
                 if (page != destination.page) page = destination.page
@@ -422,6 +432,7 @@ internal fun TvSettingsScreen(
                 onBack = onBack,
                 developerOptionsEnabled = developerOptionsEnabled,
                 onUnlockDeveloperOptions = ::requestDeveloperOptions,
+                onUnlockNotice = { unlockNotice = it },
             )
         }
     }
