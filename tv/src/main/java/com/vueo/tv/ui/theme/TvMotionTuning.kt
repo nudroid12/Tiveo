@@ -12,7 +12,7 @@ import org.json.JSONObject
 internal enum class TvMotionGroup(val title: String, val enterMs: Int, val exitMs: Int) {
     FORWARD("Page: forward / Details", 175, 128),
     BACK("Page: back", 150, 112),
-    TABS("Home / Search / Library / Settings", 130, 96),
+    TABS("Top-level tabs", TvMotion.TAB_IN_MS, TvMotion.TAB_OUT_MS),
     PLAYER_ROUTE("Enter / leave player", 165, 105),
     FOCUS("Card & button focus", 120, 90),
     HERO("Hero backdrop & copy", 400, 400),
@@ -33,7 +33,7 @@ internal enum class TvMotionGroup(val title: String, val enterMs: Int, val exitM
     fun defaults() = TvMotionValues(
         enterMs = enterMs, exitMs = exitMs,
         scale = if (this == FOCUS) 1.05f else if (this == BACK) 1.008f else .990f,
-        exitDelayMs = when (this) { FORWARD -> 42; BACK -> 34; TABS -> 28; PLAYER_ROUTE -> 32; else -> 0 },
+        exitDelayMs = when (this) { FORWARD -> 42; BACK -> 34; TABS -> TvMotion.TAB_OUT_DELAY_MS; PLAYER_ROUTE -> 32; else -> 0 },
     )
 }
 
