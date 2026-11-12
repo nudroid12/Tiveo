@@ -1,5 +1,8 @@
 package com.vueo.tv.ui
 
+import androidx.compose.ui.Alignment
+import com.vueo.tv.ui.motion.LocalTvMotionFinish
+
 import android.view.KeyEvent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -232,18 +235,58 @@ internal fun TvEpisodeRangeControls(
         var input by remember { mutableStateOf("") }
         var error by remember { mutableStateOf(false) }
         val inputRequester = remember { FocusRequester() }
-        LaunchedEffect(Unit) { inputRequester.requestFocus() }
-        AlertDialog(
-            onDismissRequest = { dialog = false; onInteraction() },
-            containerColor = Color(0xFF303030), titleContentColor = Color.White,
-            title = { Text("Go to episode") },
-            text = { OutlinedTextField(value = input, onValueChange = { onInteraction(); input = it.filter(Char::isDigit).take(6); error = false }, singleLine = true,
-                modifier = Modifier.focusRequester(inputRequester), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                label = { Text("Episode number") }, isError = error,
-                supportingText = { if (error) Text("Episode not available in this season") },
-                colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = Color.White, unfocusedBorderColor = Color.Gray, focusedLabelColor = Color.White)) },
-            confirmButton = { TextButton(onClick = { onInteraction(); if (input.toIntOrNull()?.let(state::jump) == true) dialog = false else error = true }) { Text("Go", color = Color.White) } },
-            dismissButton = { TextButton(onClick = { dialog = false; onInteraction() }) { Text("Cancel", color = Color.White) } },
-        )
+        val cancelFocus = remember { FocusRequester() }
+        val goFocus = remember { FocusRequester() }
+        fun closeDialog() {
+            dialog = false
+            onInteraction()
+        }
+
+        TvThemedDialog("Go to episode", inputRequester, ::closeDialog) {
+            val finish = LocalTvMotionFinish.current
+            OutlinedTextField(
+                value = input,
+                onValueChange = {
+                    onInteraction()
+                    input = it.filter(Char::isDigit).take(6)
+                    error = false
+                },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().focusRequester(inputRequester).focusProperties {
+                    down = cancelFocus
+                },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                label = { Text("Episode number") },
+                isError = error,
+                supportingText = if (error) ({ Text("Episode not available in this season") }) else null,
+                shape = RoundedCornerShape(12.dp),
+                colors = tvDialogInputColors(),
+            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)) {
+                TvDialogButton(
+                    label = "Cancel",
+                    modifier = Modifier.focusRequester(cancelFocus).focusProperties {
+                        up = inputRequester
+                        right = goFocus
+                    },
+                    onClick = { finish(::closeDialog) },
+                )
+                TvDialogButton(
+                    label = "Go",
+                    modifier = Modifier.focusRequester(goFocus).focusProperties {
+                        up = inputRequester
+                        left = cancelFocus
+                    },
+                    onClick = {
+                        onInteraction()
+                        if (input.toIntOrNull()?.let(state::jump) == true) {
+                            finish { dialog = false }
+                        } else {
+                            error = true
+                        }
+                    },
+                )
+            }
+        }
     }
 }

@@ -214,7 +214,7 @@ internal fun TvAddonSettings(
     if (showAdd) {
         TvTextEntryDialog(
             title = "Add Addon",
-            themedInstall = true,
+            busyLabel = "Installing…",
             confirmLabel = "Install",
             initialValue = installDraft,
             busy = installing,
@@ -252,7 +252,6 @@ internal fun TvAddonSettings(
             title = "Remove addon?",
             message = "Remove ${addonByManifest[url.trim()]?.descriptor?.name ?: shortUrl(url)} from Tiveo?",
             confirmLabel = "Remove",
-            themedRemove = true,
             onDismiss = { removeUrl = null },
             onConfirm = {
                 removeUrl = null
@@ -493,7 +492,7 @@ internal fun TvProviderSettings(
     if (showAdd) {
         TvTextEntryDialog(
             title = "Add Provider Repository",
-            themedInstall = true,
+            busyLabel = "Installing…",
             initialValue = "",
             placeholder = "https://…/manifest.json",
             confirmLabel = "Install",
@@ -538,7 +537,6 @@ internal fun TvProviderSettings(
             title = "Remove repository?",
             message = "Remove ${repository.name} and its provider configuration?",
             confirmLabel = "Remove",
-            themedRemove = true,
             onDismiss = { removeRepo = null },
             onConfirm = {
                 removeRepo = null

@@ -1,5 +1,9 @@
 package com.vueo.tv.settings
 
+import com.vueo.tv.ui.TvDialogButton
+import com.vueo.tv.ui.TvThemedDialog
+import com.vueo.tv.ui.motion.LocalTvMotionFinish
+
 import com.vueo.shared.core.player.SubtitleFlowDiagnostics
 import com.vueo.shared.core.plugin.ProviderDiagnosticSummary
 import com.vueo.shared.core.plugin.ProviderDiagnosticProgress
@@ -39,7 +43,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import com.vueo.tv.ui.motion.TvMotionAlertDialog as AlertDialog
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -85,111 +88,96 @@ internal fun TvProviderDiagnosticDialog(
         restoreSettingsFocus()
     }
 
-    AlertDialog(
-        onDismissRequest = ::closeAndRestore,
-        title = {
-            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text("Provider Diagnostic")
+    val closeFocus = remember { FocusRequester() }
+    TvThemedDialog("Provider Diagnostic", closeFocus, ::closeAndRestore) {
+        val finish = LocalTvMotionFinish.current
+        Text("${provider.name} • v${provider.version}", color = TvDesign.Muted, fontSize = 12.sp)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 300.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            if (health == null) {
                 Text(
-                    text = "${provider.name} • v${provider.version}",
+                    text = "No diagnostic captured yet. Run source discovery for this provider, then reopen diagnostics.",
                     color = TvDesign.Muted,
                     fontSize = 12.sp,
                 )
-            }
-        },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 500.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                if (health == null) {
-                    Text(
-                        text = "No diagnostic captured yet. Run source discovery for this provider, then reopen diagnostics.",
-                        color = TvDesign.Muted,
-                        fontSize = 12.sp,
-                    )
-                } else {
-                    providerRequestLabelOrNull(health)?.let { DiagnosticLine("Request", it) }
-                    ProviderDiagnosticSummary.facts(health).forEach { (label, value) ->
-                        DiagnosticLine(label, sanitizeDiagnosticText(value))
-                    }
-                    if (ProviderDiagnosticSummary.hasFailure(health, providerCodeReady)) {
-                        DiagnosticLine("Failure", "${providerFailureStage(health, providerCodeReady)} • ${providerFailureCategory(health)}")
-                    }
-                    health.errorType?.takeIf { it.isNotBlank() }?.let {
-                        DiagnosticLine("Error type", sanitizeDiagnosticText(it))
-                    }
-                    providerHttpStatus(health)?.let { DiagnosticLine("HTTP", it) }
-                    providerRelevantTimingLabel(health)?.let { DiagnosticLine("Timing", it) }
-                    ProviderDiagnosticProgress.lastStage(health.logs)?.let { DiagnosticLine("Last stage", sanitizeDiagnosticText(it)) }
-                    ProviderDiagnosticProgress.pending(health.logs).takeIf { it.isNotEmpty() }?.let {
-                        DiagnosticLine("Pending requests", it.joinToString("\n") { line -> sanitizeDiagnosticText(line) })
-                    }
-                    if (!providerCodeReady) {
-                        DiagnosticLine("Provider code", "Missing or not ready")
-                    }
-                    health.error?.takeIf { it.isNotBlank() }?.let {
-                        DiagnosticLine("Error", sanitizeDiagnosticText(it))
-                    }
-
-                    Surface(
-                        color = TvDesign.Surface,
-                        shape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            Text(ProviderDiagnosticSummary.noteTitle(health, providerCodeReady), fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                            Text(
-                                text = providerLikelyCause(health, providerCodeReady),
-                                color = TvDesign.Muted,
-                                fontSize = 11.sp,
-                            )
-                        }
-                    }
-
-                    TextButton(onClick = { rawExpanded = !rawExpanded }) {
-                        Text("Raw technical log  ${if (rawExpanded) "v" else ">"}")
-                    }
-                    if (rawExpanded) {
-                        Text(
-                            text = providerRawDiagnosticLog(health),
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 10.sp,
-                            color = TvDesign.Muted,
-                        )
-                    }
+            } else {
+                providerRequestLabelOrNull(health)?.let { DiagnosticLine("Request", it) }
+                ProviderDiagnosticSummary.facts(health).forEach { (label, value) ->
+                    DiagnosticLine(label, sanitizeDiagnosticText(value))
                 }
-            }
-        },
-        confirmButton = {
-            if (health != null) {
-                TextButton(
-                    onClick = {
-                        copyProviderDiagnostic(
-                            context = context,
-                            text = providerDiagnosticFullLog(
-                                repository = repository,
-                                provider = provider,
-                                health = health,
-                                currentlyEnabled = currentlyEnabled,
-                                providerCodeReady = providerCodeReady,
-                            ),
-                        )
-                    },
+                if (ProviderDiagnosticSummary.hasFailure(health, providerCodeReady)) {
+                    DiagnosticLine("Failure", "${providerFailureStage(health, providerCodeReady)} • ${providerFailureCategory(health)}")
+                }
+                health.errorType?.takeIf { it.isNotBlank() }?.let {
+                    DiagnosticLine("Error type", sanitizeDiagnosticText(it))
+                }
+                providerHttpStatus(health)?.let { DiagnosticLine("HTTP", it) }
+                providerRelevantTimingLabel(health)?.let { DiagnosticLine("Timing", it) }
+                ProviderDiagnosticProgress.lastStage(health.logs)?.let { DiagnosticLine("Last stage", sanitizeDiagnosticText(it)) }
+                ProviderDiagnosticProgress.pending(health.logs).takeIf { it.isNotEmpty() }?.let {
+                    DiagnosticLine("Pending requests", it.joinToString("\n") { line -> sanitizeDiagnosticText(line) })
+                }
+                if (!providerCodeReady) {
+                    DiagnosticLine("Provider code", "Missing or not ready")
+                }
+                health.error?.takeIf { it.isNotBlank() }?.let {
+                    DiagnosticLine("Error", sanitizeDiagnosticText(it))
+                }
+
+                Surface(
+                    color = TvDesign.Surface,
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
                 ) {
-                    Text("Copy Debug Log")
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(ProviderDiagnosticSummary.noteTitle(health, providerCodeReady), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text(
+                            text = providerLikelyCause(health, providerCodeReady),
+                            color = TvDesign.Muted,
+                            fontSize = 11.sp,
+                        )
+                    }
+                }
+
+                TvDialogButton(
+                    label = if (rawExpanded) "Hide technical log" else "Show technical log",
+                    onClick = { rawExpanded = !rawExpanded },
+                )
+                if (rawExpanded) {
+                    Text(
+                        text = providerRawDiagnosticLog(health),
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        color = TvDesign.Muted,
+                    )
                 }
             }
-        },
-        dismissButton = {
-            TextButton(onClick = ::closeAndRestore) { Text("Close") }
-        },
-    )
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)) {
+            TvDialogButton("Close", { finish(::closeAndRestore) }, Modifier.focusRequester(closeFocus))
+            if (health != null) {
+                TvDialogButton("Copy Debug Log", onClick = {
+                    copyProviderDiagnostic(
+                        context = context,
+                        text = providerDiagnosticFullLog(
+                            repository = repository,
+                            provider = provider,
+                            health = health,
+                            currentlyEnabled = currentlyEnabled,
+                            providerCodeReady = providerCodeReady,
+                        ),
+                    )
+                })
+            }
+        }
+    }
 }
 
 
@@ -500,7 +488,7 @@ internal fun TvRuntimeDiagnosticsDialog(
                             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                             clipboard?.setPrimaryClip(
                                 ClipData.newPlainText(
-                                    if (showRaw) "Tiveo raw diagnostic" else "Tiveo diagnostic summary",
+                                    if (showRaw) "VUEO raw diagnostic" else "VUEO diagnostic summary",
                                     fullText,
                                 )
                             )
@@ -930,7 +918,7 @@ internal fun TvPerformanceDiagnosticsDialog(
                             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                             clipboard?.setPrimaryClip(
                                 ClipData.newPlainText(
-                                    "Tiveo ${diagnostics.kind} ${if (showRaw) "raw" else "summary"} ${selectedTab.label}",
+                                    "VUEO ${diagnostics.kind} ${if (showRaw) "raw" else "summary"} ${selectedTab.label}",
                                     fullText,
                                 )
                             )
@@ -1104,7 +1092,7 @@ private fun providerDiagnosticFullLog(
     currentlyEnabled: Boolean,
     providerCodeReady: Boolean,
 ): String = buildString {
-    appendLine("Tiveo Provider Debug Log")
+    appendLine("VUEO Provider Debug Log")
     appendLine("Provider: ${provider.name} v${provider.version}")
     appendLine("Status: ${if (currentlyEnabled) ProviderDiagnosticSummary.statusLabel(health) else "Disabled (last ${ProviderDiagnosticSummary.statusLabel(health)})"}")
     providerRequestLabelOrNull(health)?.let { appendLine("Request: $it") }
@@ -1173,7 +1161,7 @@ private fun sanitizeDiagnosticUrl(url: String): String {
 
 private fun copyProviderDiagnostic(context: Context, text: String) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-    clipboard?.setPrimaryClip(ClipData.newPlainText("Tiveo provider diagnostic", text))
+    clipboard?.setPrimaryClip(ClipData.newPlainText("VUEO provider diagnostic", text))
     Toast.makeText(context, "Debug log copied", Toast.LENGTH_SHORT).show()
 }
 

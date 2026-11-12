@@ -1,5 +1,11 @@
 package com.vueo.tv.settings
 
+import androidx.compose.ui.text.input.VisualTransformation
+import com.vueo.tv.ui.TvDialogButton
+import com.vueo.tv.ui.TvThemedDialog
+import com.vueo.tv.ui.motion.LocalTvMotionFinish
+import com.vueo.tv.ui.tvDialogInputColors
+
 import com.vueo.tv.ui.TvModalDialog
 import com.vueo.tv.ui.theme.TvTabMarkerHost
 import com.vueo.tv.ui.theme.tvTabMarker
@@ -31,19 +37,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.OutlinedTextFieldDefaults
-import com.vueo.tv.ui.motion.TvMotionDialog as Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.layout.PaddingValues
-import com.vueo.tv.ui.motion.TvMotionAlertDialog as AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -1496,10 +1495,10 @@ internal fun TvTextEntryDialog(
     title: String,
     initialValue: String,
     secret: Boolean = false,
-    themedInstall: Boolean = false,
     placeholder: String = "",
     confirmLabel: String = "Save",
     busy: Boolean = false,
+    busyLabel: String = "Working…",
     message: String? = null,
     restoreOnSave: Boolean = true,
     allowSecretReveal: Boolean = false,
@@ -1521,99 +1520,73 @@ internal fun TvTextEntryDialog(
         if (restoreOnSave) restoreSettingsFocus()
     }
 
-    if (themedInstall) {
-        val inputRequester = remember { FocusRequester() }
-        val cancelRequester = remember { FocusRequester() }
-        val installRequester = remember { FocusRequester() }
-        LaunchedEffect(Unit) { inputRequester.requestFocus() }
-        Dialog(onDismissRequest = { if (!busy) dismissAndRestore() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-            Column(
-                modifier = Modifier.width(440.dp)
-                    .background(TvDesign.Surface, RoundedCornerShape(18.dp))
-                    .border(1.dp, TvDesign.White.copy(alpha = .22f), RoundedCornerShape(18.dp))
-                    .padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                Text(title, color = TvDesign.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-                OutlinedTextField(
-                    value = value, onValueChange = { value = it }, enabled = !busy, singleLine = true,
-                    modifier = Modifier.fillMaxWidth().focusRequester(inputRequester)
-                        .focusProperties { down = cancelRequester },
-                    placeholder = { Text(placeholder, color = TvDesign.Dim, fontSize = 13.sp) },
-                    textStyle = LocalTextStyle.current.copy(color = TvDesign.White, fontSize = 14.sp),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = TvDesign.White, unfocusedBorderColor = TvDesign.White.copy(alpha = .28f),
-                        cursorColor = TvDesign.White, focusedContainerColor = TvDesign.SurfaceRaised,
-                        unfocusedContainerColor = TvDesign.SurfaceRaised,
-                    ),
-                )
-                message?.takeIf { it.isNotBlank() }?.let { Text(it, color = TvDesign.Muted, fontSize = 12.sp) }
-                if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = TvDesign.White)
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)) {
-                    TvInstallDialogButton("Cancel", !busy, Modifier.focusRequester(cancelRequester).focusProperties {
-                        up = inputRequester
-                        if (!busy && value.isNotBlank()) right = installRequester
-                    }, ::dismissAndRestore)
-                    TvInstallDialogButton(if (busy) "Installing…" else confirmLabel, !busy && value.isNotBlank(),
-                        Modifier.focusRequester(installRequester).focusProperties { up = inputRequester; left = cancelRequester }, ::saveAndRestore)
-                }
-            }
+    val inputFocus = remember { FocusRequester() }
+    val revealFocus = remember { FocusRequester() }
+    val cancelFocus = remember { FocusRequester() }
+    val saveFocus = remember { FocusRequester() }
+    val showReveal = secret && allowSecretReveal
+    val canSave = !busy && value.isNotBlank()
+
+    TvThemedDialog(title, inputFocus, ::dismissAndRestore, dismissOnBackPress = !busy) {
+        val finish = LocalTvMotionFinish.current
+        OutlinedTextField(
+            value = value,
+            onValueChange = { value = it },
+            enabled = !busy,
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().focusRequester(inputFocus).focusProperties {
+                down = if (showReveal) revealFocus else cancelFocus
+            },
+            placeholder = { if (placeholder.isNotBlank()) Text(placeholder, color = TvDesign.Dim) },
+            textStyle = LocalTextStyle.current.copy(fontSize = 14.sp),
+            visualTransformation = if (secret && !secretVisible) {
+                PasswordVisualTransformation()
+            } else {
+                VisualTransformation.None
+            },
+            shape = RoundedCornerShape(12.dp),
+            colors = tvDialogInputColors(),
+        )
+        if (showReveal) {
+            TvDialogButton(
+                label = if (secretVisible) "Hide API key" else "Show API key",
+                enabled = !busy,
+                modifier = Modifier.focusRequester(revealFocus).focusProperties {
+                    up = inputFocus
+                    down = cancelFocus
+                },
+                onClick = { secretVisible = !secretVisible },
+            )
         }
-        return
+        message?.takeIf { it.isNotBlank() }?.let {
+            Text(it, color = TvDesign.Muted, fontSize = 12.sp)
+        }
+        if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = TvDesign.White)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)) {
+            val above = if (showReveal) revealFocus else inputFocus
+            TvDialogButton(
+                label = "Cancel",
+                enabled = !busy,
+                modifier = Modifier.focusRequester(cancelFocus).focusProperties {
+                    up = above
+                    if (canSave) right = saveFocus
+                },
+                onClick = { finish(::dismissAndRestore) },
+            )
+            TvDialogButton(
+                label = if (busy) busyLabel else confirmLabel,
+                enabled = canSave,
+                modifier = Modifier.focusRequester(saveFocus).focusProperties {
+                    up = above
+                    left = cancelFocus
+                },
+                onClick = {
+                    // Keep the dialog open while an installation reports progress.
+                    if (restoreOnSave) finish(::saveAndRestore) else saveAndRestore()
+                },
+            )
+        }
     }
-
-    AlertDialog(
-        onDismissRequest = { if (!busy) dismissAndRestore() },
-        title = { Text(title) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = value,
-                    onValueChange = { value = it },
-                    enabled = !busy,
-                    singleLine = true,
-                    placeholder = { if (placeholder.isNotBlank()) Text(placeholder) },
-                    visualTransformation = if (secret && !(allowSecretReveal && secretVisible)) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
-                )
-                if (secret && allowSecretReveal) {
-                    TextButton(enabled = !busy, onClick = { secretVisible = !secretVisible }) {
-                        Text(if (secretVisible) "Hide API key" else "Show API key")
-                    }
-                }
-                message?.takeIf { it.isNotBlank() }?.let {
-                    Text(it, color = TvDesign.Muted, fontSize = 12.sp)
-                }
-                if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-            }
-        },
-        confirmButton = {
-            TextButton(
-                enabled = !busy && value.isNotBlank(),
-                onClick = ::saveAndRestore,
-            ) { Text(if (busy) "Working…" else confirmLabel) }
-        },
-        dismissButton = {
-            TextButton(enabled = !busy, onClick = ::dismissAndRestore) { Text("Cancel") }
-        },
-    )
-}
-
-@Composable
-private fun TvInstallDialogButton(label: String, enabled: Boolean, modifier: Modifier, onClick: () -> Unit, destructive: Boolean = false) {
-    var focused by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(50)
-    TextButton(
-        enabled = enabled, onClick = onClick,
-        modifier = modifier.onFocusChanged { focused = it.isFocused }
-            .background(if (focused) TvDesign.White else TvDesign.Surface, shape)
-            .border(1.dp, TvDesign.White.copy(alpha = if (focused) 1f else .25f), shape),
-        colors = ButtonDefaults.textButtonColors(
-            contentColor = if (destructive) MaterialTheme.colorScheme.error else if (focused) TvDesign.Black else TvDesign.White,
-            disabledContentColor = TvDesign.Dim.copy(alpha = .5f),
-        ),
-        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
-    ) { Text(label, fontSize = 13.sp, fontWeight = FontWeight.Medium) }
 }
 
 @Composable
@@ -1640,7 +1613,7 @@ internal fun TvDeveloperPinChoice(
                 Text("Protect Developer options?", color = TvDesign.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
                 Text("Set a 4-digit PIN or continue without one.", color = TvDesign.Muted, fontSize = 13.sp)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)) {
-                    TvInstallDialogButton(
+                    TvDialogButton(
                         label = "Skip",
                         enabled = true,
                         modifier = Modifier.focusRequester(skipRequester).focusProperties {
@@ -1649,7 +1622,7 @@ internal fun TvDeveloperPinChoice(
                         },
                         onClick = { finish { onSkip() } },
                     )
-                    TvInstallDialogButton(
+                    TvDialogButton(
                         label = "Set PIN",
                         enabled = true,
                         modifier = Modifier.focusRequester(setPinRequester).focusProperties {
@@ -1669,7 +1642,6 @@ internal fun TvConfirmDialog(
     title: String,
     message: String,
     confirmLabel: String = "Confirm",
-    themedRemove: Boolean = false,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
 ) {
@@ -1685,47 +1657,26 @@ internal fun TvConfirmDialog(
         restoreSettingsFocus()
     }
 
-    if (themedRemove) {
-        val cancelRequester = remember { FocusRequester() }
-        val removeRequester = remember { FocusRequester() }
-        LaunchedEffect(Unit) { cancelRequester.requestFocus() }
-        Dialog(onDismissRequest = ::dismissAndRestore, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-            val finish = com.vueo.tv.ui.motion.LocalTvMotionFinish.current
-            Column(
-                modifier = Modifier.width(440.dp)
-                    .background(TvDesign.Surface, RoundedCornerShape(18.dp))
-                    .border(1.dp, TvDesign.White.copy(alpha = .22f), RoundedCornerShape(18.dp))
-                    .padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                Text(title, color = TvDesign.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-                Text(message, color = TvDesign.Muted, fontSize = 13.sp, lineHeight = 19.sp)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)) {
-                    TvInstallDialogButton("Cancel", true,
-                        Modifier.focusRequester(cancelRequester).focusProperties { left = FocusRequester.Cancel; right = removeRequester },
-                        { finish { dismissAndRestore() } })
-                    TvInstallDialogButton(confirmLabel, true,
-                        Modifier.focusRequester(removeRequester).focusProperties { left = cancelRequester; right = FocusRequester.Cancel },
-                        { finish { confirmAndRestore() } }, destructive = true)
-                }
-            }
-        }
-        return
-    }
+    val cancelFocus = remember { FocusRequester() }
+    val confirmFocus = remember { FocusRequester() }
 
-    AlertDialog(
-        onDismissRequest = ::dismissAndRestore,
-        title = { Text(title) },
-        text = { Text(message) },
-        confirmButton = {
-            val finish = com.vueo.tv.ui.motion.LocalTvMotionFinish.current
-            TextButton(onClick = { finish { confirmAndRestore() } }) { Text(confirmLabel) }
-        },
-        dismissButton = {
-            val finish = com.vueo.tv.ui.motion.LocalTvMotionFinish.current
-            TextButton(onClick = { finish { dismissAndRestore() } }) { Text("Cancel") }
-        },
-    )
+    TvThemedDialog(title, cancelFocus, ::dismissAndRestore) {
+        val finish = LocalTvMotionFinish.current
+        Text(message, color = TvDesign.Muted, fontSize = 13.sp, lineHeight = 19.sp)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)) {
+            TvDialogButton(
+                label = "Cancel",
+                modifier = Modifier.focusRequester(cancelFocus).focusProperties { right = confirmFocus },
+                onClick = { finish(::dismissAndRestore) },
+            )
+            TvDialogButton(
+                label = confirmLabel,
+                destructive = true,
+                modifier = Modifier.focusRequester(confirmFocus).focusProperties { left = cancelFocus },
+                onClick = { finish(::confirmAndRestore) },
+            )
+        }
+    }
 }
 
 internal fun <T> cycle(values: List<T>, current: T, delta: Int): T {
