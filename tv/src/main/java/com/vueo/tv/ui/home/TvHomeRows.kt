@@ -83,6 +83,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.delay
+import kotlin.math.ceil
 
 // Lazy diagnostic messages: no string construction while diagnostics is OFF.
 private inline fun traceHome(build: () -> String) {
@@ -664,14 +665,21 @@ private fun TvModernHomeRow(
     val density = LocalDensity.current
     val defaultBringIntoViewSpec = LocalBringIntoViewSpec.current
     val rowHorizontalPadding = MODERN_HOME_CONTENT_START_PADDING
-    // Reserve paint space for the 1.022x focus scale without moving the cards.
-    val focusPaintInset = if (row.kind == TvHomeRowKind.CONTINUE_WATCHING) 4.dp else 0.dp
+    val wideCard = row.kind == TvHomeRowKind.CONTINUE_WATCHING || row.kind == TvHomeRowKind.COLLECTIONS
+    val cardWidth = if (wideCard) ContinueWatchingWidth else PosterWidth
+    val cardHeight = if (wideCard) ContinueWatchingHeight else PosterHeight
+    val focusScale = tvTunedFocusScale(if (row.kind == TvHomeRowKind.CONTINUE_WATCHING) 1.022f else 1.035f)
+    // The focus outline scales with the card. Reserve its overhang inside the clipped row.
+    val focusPaintInset = if (focusScale > 1f) {
+        val overhang = maxOf(cardWidth, cardHeight).value * (focusScale - 1f) / 2f
+        ceil(overhang).dp + 1.dp
+    } else 0.dp
 
     // Port of NuvioTV 0.8.3-beta ModernHomeRows focus alignment policy.
     // Left/Right keeps the focused poster at the row start; Up/Down must
     // restore the row position before asking Compose to focus that poster.
     // This row already has external left padding, so the local anchor is 0
-    // (or focusPaintInset for scaled Continue Watching cards).
+    // (or focusPaintInset when the focused card is scaled).
     val horizontalBringIntoViewSpec = remember(
         density, defaultBringIntoViewSpec, focusPaintInset,
     ) {
@@ -889,7 +897,7 @@ private fun TvModernHomeRow(
                     contentPadding = PaddingValues(
                         start = focusPaintInset,
                         top = focusPaintInset,
-                        end = 32.dp,
+                        end = 32.dp.coerceAtLeast(focusPaintInset),
                         bottom = focusPaintInset,
                     ),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -919,6 +927,9 @@ private fun TvModernHomeRow(
                             loadImage = imageActivated[0],
                             entry = entry,
                             kind = row.kind,
+                            width = cardWidth,
+                            height = cardHeight,
+                            focusScale = focusScale,
                             requester = itemRequester,
                             contentFocusEnabled = contentFocusEnabled,
                             onLeftAtStart = onLeftAtRowStart.takeIf { index == 0 },
@@ -957,6 +968,9 @@ private fun TvModernHomeCard(
     entry: TvHomeEntry,
     loadImage: Boolean,
     kind: TvHomeRowKind,
+    width: Dp,
+    height: Dp,
+    focusScale: Float,
     requester: FocusRequester,
     contentFocusEnabled: Boolean,
     onLeftAtStart: (() -> Unit)?,
@@ -966,7 +980,7 @@ private fun TvModernHomeCard(
 ) {
     var focused by remember(entry.key) { mutableStateOf(false) }
     val animatedScale by animateFloatAsState(
-        targetValue = if (focused) tvTunedFocusScale(if (kind == TvHomeRowKind.CONTINUE_WATCHING) 1.022f else 1.035f) else 1f,
+        targetValue = if (focused) focusScale else 1f,
         animationSpec = tvTunedSpec(TvMotionGroup.FOCUS, focused, tween(
             durationMillis = if (focused) TvMotion.FOCUS_IN_MS else TvMotion.FOCUS_OUT_MS,
             easing = TvMotion.EaseOut,
@@ -974,8 +988,6 @@ private fun TvModernHomeCard(
         label = "modernHomeCardScale",
     )
 
-    val width = if (kind == TvHomeRowKind.CONTINUE_WATCHING || kind == TvHomeRowKind.COLLECTIONS) ContinueWatchingWidth else PosterWidth
-    val height = if (kind == TvHomeRowKind.CONTINUE_WATCHING || kind == TvHomeRowKind.COLLECTIONS) ContinueWatchingHeight else PosterHeight
     val shape = if (kind == TvHomeRowKind.CONTINUE_WATCHING || kind == TvHomeRowKind.COLLECTIONS) ContinueShape else PosterShape
 
     Box(

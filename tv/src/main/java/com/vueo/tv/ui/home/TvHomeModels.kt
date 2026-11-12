@@ -131,9 +131,6 @@ internal fun TvHomeEntry.heroSecondaryMeta(): String {
         } else {
             media.runtimeMinutes?.takeIf { it > 0 }?.let { add(formatMinutes(it.toLong())) }
         }
-        media.imdbRating?.takeIf { it > 0.0 }?.let { rating ->
-            add("IMDb ${"%.1f".format(java.util.Locale.US, rating)}")
-        }
     }
     return parts.distinct().joinToString("  •  ")
 }

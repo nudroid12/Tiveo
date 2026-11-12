@@ -77,6 +77,7 @@ object TvDesign {
     val Dim: Color get() = palette.dim
     val Accent: Color get() = accentState
     val Focus: Color get() = White
+    val Rating = Color(0xFFE8BD62)
 
     val ScreenPadding = PaddingValues(horizontal = 52.dp, vertical = 32.dp)
     val CardShape = RoundedCornerShape(12.dp)
