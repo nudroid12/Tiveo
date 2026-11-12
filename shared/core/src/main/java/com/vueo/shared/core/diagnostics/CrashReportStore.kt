@@ -10,7 +10,7 @@ import org.json.JSONObject
 import java.io.File
 
 /** Private on-device crash evidence, separate from the rotating diagnostic log. */
-class VueoDiagnosticApplication : Application() {
+class TiveoApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         RuntimeDiagnostics.install(this)
