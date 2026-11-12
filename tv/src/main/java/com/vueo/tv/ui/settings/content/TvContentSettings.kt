@@ -1036,6 +1036,13 @@ internal fun TvTmdbEnhancementSettings(
         add(toggleEntry("artwork", "Artwork", "Use richer backdrop and poster artwork when available.", artwork) { artwork = it; store.setTmdbArtworkEnrichmentEnabled(it) }.copy(section = "FEATURES"))
         add(toggleEntry("recommendations", "Recommendations", "Allow recommendation surfaces to use TMDB recommendations.", recommendations) { recommendations = it; store.setTmdbRecommendationsEnabled(it) }.copy(section = "FEATURES"))
         add(toggleEntry("similar", "Similar Titles", "Allow recommendation surfaces to use similar-title results.", similar) { similar = it; store.setTmdbSimilarTitlesEnabled(it) }.copy(section = "FEATURES"))
+        add(TvSettingsEntry(
+            id = "tmdb-attribution",
+            title = "TMDB Attribution",
+            subtitle = "This product uses the TMDB API but is not endorsed or certified by TMDB.",
+            enabled = false,
+            section = "CREDITS",
+        ))
     }
 
     TvSettingsListScreen(

@@ -7,7 +7,6 @@ import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SettingsInputComponent
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.runtime.Composable
@@ -40,6 +39,7 @@ import com.vueo.shared.core.storage.SubtitleSize
 import com.vueo.shared.core.storage.SubtitleVisibility
 import com.vueo.shared.core.storage.VueoBackupManager
 import com.vueo.tv.BuildConfig
+import com.vueo.tv.R
 import com.vueo.tv.core.TvRuntime
 import com.vueo.tv.ui.TvDesign
 import com.vueo.tv.ui.TvSidebarPreferences
@@ -177,7 +177,7 @@ internal fun TvAboutSettings(
     val installPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { restoreSettingsFocus() }
-    var buildNumberPresses by remember(developerOptionsEnabled) { mutableIntStateOf(0) }
+    var tiveoRowPresses by remember(developerOptionsEnabled) { mutableIntStateOf(0) }
     var checking by remember { mutableStateOf(false) }
     var downloading by remember { mutableStateOf(false) }
     var progress by remember { mutableIntStateOf(0) }
@@ -212,27 +212,27 @@ internal fun TvAboutSettings(
             checking = false
             status = when {
                 result.error != null -> result.error
-                result.release?.isNewerThanCurrent() == true -> "Tiveo ${result.release.versionName} is ready to install."
+                result.release?.isNewerThanCurrent() == true -> null
                 else -> "You're up to date."
             }
         }
     }
 
     val entries = listOf(
-        TvSettingsEntry("vueo", "Tiveo", "A universal media player.", BuildConfig.VERSION_NAME, enabled = false, section = "ABOUT", icon = Icons.Default.Settings),
         TvSettingsEntry(
-            id = "build-number",
-            title = "Build number",
-            subtitle = "Installed build.",
-            value = BuildConfig.VERSION_CODE.toString(),
+            id = "tiveo-about",
+            title = "Tiveo",
+            subtitle = "",
+            value = BuildConfig.VERSION_NAME,
+            iconDrawableRes = R.drawable.tiveo_tv_installer_icon,
             onActivate = {
                 if (developerOptionsEnabled) {
                     onUnlockNotice("Developer options are already unlocked.")
                 } else {
-                    buildNumberPresses += 1
-                    when (val stepsLeft = 7 - buildNumberPresses) {
+                    tiveoRowPresses += 1
+                    when (val stepsLeft = 7 - tiveoRowPresses) {
                         0 -> {
-                            buildNumberPresses = 0
+                            tiveoRowPresses = 0
                             onUnlockNotice(null)
                             onUnlockDeveloperOptions()
                         }
@@ -241,14 +241,11 @@ internal fun TvAboutSettings(
                     }
                 }
             },
-            section = "ABOUT",
         ),
-        TvSettingsEntry("privacy", "Privacy", "Settings and API keys stay on this device. API keys are excluded from backups unless you include them.", "Local", enabled = false, section = "ABOUT"),
-        TvSettingsEntry("tmdb", "TMDB Attribution", "This product uses the TMDB API but is not endorsed or certified by TMDB.", "TMDB", enabled = false, section = "ABOUT"),
         TvSettingsEntry(
             "update",
             "Check for Updates",
-            status ?: "Check and install the latest Tiveo build.",
+            status?.takeUnless { it == "You're up to date." }.orEmpty(),
             when {
                 checking -> "Checking…"
                 downloading -> "$progress%"
@@ -258,12 +255,12 @@ internal fun TvAboutSettings(
                 else -> "Check"
             },
             onActivate = ::updateAction,
-            section = "ABOUT",
+            showDivider = false,
             icon = Icons.Default.Refresh,
         ),
     )
     TvSettingsListScreen(
-        "About Tiveo", "Version, updates and app information.",
+        "About Tiveo", "",
         entries, onNavigate, onProfile, onBack,
     )
 }

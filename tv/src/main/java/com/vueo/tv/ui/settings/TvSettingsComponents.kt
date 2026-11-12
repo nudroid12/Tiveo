@@ -120,6 +120,8 @@ internal data class TvSettingsEntry(
     val providerPanelEnd: Boolean = false,
     val supportingContent: (@Composable () -> Unit)? = null,
     val operationStatus: String? = null,
+    val iconDrawableRes: Int? = null,
+    val showDivider: Boolean = true,
 )
 
 internal data class TvSettingsNavItem(
@@ -977,13 +979,17 @@ internal fun TvSettingsListScreen(
                 fontSize = 28.sp,
                 fontWeight = FontWeight.Bold,
             )
-            Text(
-                text = subtitle,
-                color = TvDesign.Muted,
-                fontSize = 12.sp,
-                lineHeight = 16.sp,
-                modifier = Modifier.padding(top = 6.dp, bottom = 16.dp),
-            )
+            if (subtitle.isNotBlank()) {
+                Text(
+                    text = subtitle,
+                    color = TvDesign.Muted,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    modifier = Modifier.padding(top = 6.dp, bottom = 16.dp),
+                )
+            } else {
+                Spacer(Modifier.height(12.dp))
+            }
 
             if (metrics.isNotEmpty()) {
                 TvSettingsMetricsRow(metrics = metrics, inlineLabels = contentManager)
@@ -1115,13 +1121,17 @@ private fun TvSettingsEmbeddedPanel(
             fontSize = 29.sp,
             fontWeight = FontWeight.Bold,
         )
-        Text(
-            text = subtitle,
-            color = TvDesign.Muted,
-            fontSize = 13.sp,
-            lineHeight = 18.sp,
-            modifier = Modifier.padding(top = 5.dp, bottom = 16.dp),
-        )
+        if (subtitle.isNotBlank()) {
+            Text(
+                text = subtitle,
+                color = TvDesign.Muted,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+                modifier = Modifier.padding(top = 5.dp, bottom = 16.dp),
+            )
+        } else {
+            Spacer(Modifier.height(12.dp))
+        }
 
         if (metrics.isNotEmpty()) {
             TvSettingsMetricsRow(metrics = metrics, compact = !addonLayout, inlineLabels = contentManager)
@@ -1276,7 +1286,7 @@ internal fun TvSettingsRow(
                 shape,
             )
             .drawBehind {
-                if (!focused) {
+                if (!focused && entry.showDivider) {
                     val y = size.height - .5.dp.toPx()
                     drawLine(divider, Offset(12.dp.toPx(), y), Offset(size.width - 12.dp.toPx(), y), 1.dp.toPx())
                 }
@@ -1285,7 +1295,14 @@ internal fun TvSettingsRow(
             .padding(horizontal = 16.dp, vertical = if (compact) 7.dp else 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (!entry.badge.isNullOrBlank()) {
+        if (entry.iconDrawableRes != null) {
+            Image(
+                painter = painterResource(entry.iconDrawableRes),
+                contentDescription = null,
+                modifier = Modifier.size(if (compact) 32.dp else 44.dp),
+            )
+            Spacer(Modifier.width(14.dp))
+        } else if (!entry.badge.isNullOrBlank()) {
             Box(
                 modifier = Modifier
                     .size(if (compact) 32.dp else 44.dp)
@@ -1347,14 +1364,16 @@ internal fun TvSettingsRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                text = entry.subtitle,
-                color = if (entry.enabled) TvDesign.Muted else TvDesign.Dim.copy(alpha = .65f),
-                fontSize = 12.sp,
-                lineHeight = 15.sp,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            if (entry.subtitle.isNotBlank()) {
+                Text(
+                    text = entry.subtitle,
+                    color = if (entry.enabled) TvDesign.Muted else TvDesign.Dim.copy(alpha = .65f),
+                    fontSize = 12.sp,
+                    lineHeight = 15.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             entry.supportingContent?.invoke()
             if (entry.choices.isNotEmpty()) {
                 val selectedIndex = entry.selectedChoiceIndex.coerceIn(0, entry.choices.lastIndex)
