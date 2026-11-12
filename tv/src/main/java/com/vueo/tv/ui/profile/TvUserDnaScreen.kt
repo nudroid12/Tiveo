@@ -61,9 +61,6 @@ import com.vueo.shared.core.profile.ProfileAvatarCatalog
 import com.vueo.shared.core.storage.VueoProfile
 import com.vueo.tv.core.TvRuntime
 import com.vueo.tv.home.MODERN_HOME_CONTENT_START_PADDING
-import com.vueo.tv.home.TiveoPageContentFocus
-import com.vueo.tv.home.TiveoTopBarHeight
-import com.vueo.tv.home.TiveoTopBarState
 import com.vueo.tv.ui.TvDesign
 import com.vueo.tv.ui.motion.TvMotion
 import kotlinx.coroutines.Dispatchers
@@ -76,7 +73,6 @@ internal fun TvUserDnaScreen(
     runtime: TvRuntime,
     dataVersion: Int,
     active: Boolean,
-    topBar: TiveoTopBarState,
     onSwitchProfiles: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -86,18 +82,15 @@ internal fun TvUserDnaScreen(
         runCatching { switchRequester.requestFocus() }
     }
 
-    BackHandler(enabled = active) {
-        if (topBar.hasFocus) onBack() else topBar.focus("Profile")
-    }
+    BackHandler(enabled = active, onBack = onBack)
     LaunchedEffect(profile.id, active) {
         if (!active) return@LaunchedEffect
         withFrameNanos { }
-        if (!topBar.hasFocus) focusSwitchProfiles()
+        focusSwitchProfiles()
     }
-    TiveoPageContentFocus(topBar, "Profile", active, ::focusSwitchProfiles)
 
     if (!runtime.dnaPreferences.userDnaEnabled(profile.id)) {
-        DnaDisabledScreen(profile, switchRequester, onSwitchProfiles) { topBar.focus("Profile") }
+        DnaDisabledScreen(profile, switchRequester, onSwitchProfiles)
         return
     }
 
@@ -119,7 +112,7 @@ internal fun TvUserDnaScreen(
             .padding(
                 start = MODERN_HOME_CONTENT_START_PADDING,
                 end = MODERN_HOME_CONTENT_START_PADDING,
-                top = TiveoTopBarHeight + 10.dp,
+                top = 40.dp,
                 bottom = 24.dp,
             )
             .onPreviewKeyEvent { event ->
@@ -130,11 +123,7 @@ internal fun TvUserDnaScreen(
                 }
                 if (direction == 0) false else {
                     if (event.type == KeyEventType.KeyDown) {
-                        if (direction < 0 && scrollState.value == 0) {
-                            topBar.focus("Profile")
-                        } else {
-                            scrollScope.launch { scrollState.scrollBy(direction * scrollStep) }
-                        }
+                        scrollScope.launch { scrollState.scrollBy(direction * scrollStep) }
                     }
                     true
                 }
@@ -142,20 +131,6 @@ internal fun TvUserDnaScreen(
             .verticalScroll(scrollState),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(
-                text = "Your DNA",
-                color = TvDesign.White,
-                fontSize = 30.sp,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                text = "Your local taste profile, shaped by what you watch and save.",
-                color = TvDesign.Muted,
-                fontSize = 14.sp,
-            )
-        }
-
         DnaProfileCard(
             profile = profile,
             snapshot = snapshot,
@@ -202,7 +177,6 @@ private fun DnaDisabledScreen(
     profile: VueoProfile,
     switchRequester: FocusRequester,
     onSwitchProfiles: () -> Unit,
-    onOpenNavigation: () -> Unit,
 ) {
     var focused by remember(profile.id) { mutableStateOf(false) }
     Column(
@@ -212,20 +186,11 @@ private fun DnaDisabledScreen(
             .padding(
                 start = MODERN_HOME_CONTENT_START_PADDING,
                 end = MODERN_HOME_CONTENT_START_PADDING,
-                top = TiveoTopBarHeight + 10.dp,
+                top = 40.dp,
                 bottom = 24.dp,
-            )
-            .onPreviewKeyEvent { event ->
-                if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-                    onOpenNavigation()
-                    true
-                } else {
-                    false
-                }
-            },
+            ),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text("Your DNA", color = TvDesign.White, fontSize = 30.sp, fontWeight = FontWeight.Bold)
         Row(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(TvDesign.SurfaceRaised).padding(20.dp),
             verticalAlignment = Alignment.CenterVertically,

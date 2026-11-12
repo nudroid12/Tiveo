@@ -129,7 +129,6 @@ private val TvRoute.topBarTab: String?
         TvRoute.SEARCH -> "Search"
         TvRoute.LIBRARY -> "Library"
         TvRoute.SETTINGS -> "Settings"
-        TvRoute.DNA -> "Profile"
         else -> null
     }
 
@@ -372,14 +371,12 @@ fun VueoTvApp(
 
     fun navigate(label: String) {
         if (route.topBarTab == label) return
-        if (label == "Profile") dnaReturnRoute = route
         if (label == "Search") PerformanceDiagnostics.captureRuntimeEvent("SEARCH_TAB_PRESS")
         route = when (label) {
             "Home" -> TvRoute.HOME
             "Search" -> TvRoute.SEARCH
             "Library" -> TvRoute.LIBRARY
             "Settings" -> TvRoute.SETTINGS
-            "Profile" -> TvRoute.DNA
             else -> route
         }
     }
@@ -1350,7 +1347,6 @@ fun VueoTvApp(
                         runtime = runtime,
                         dataVersion = refreshToken,
                         active = route == TvRoute.DNA,
-                        topBar = topBar,
                         onSwitchProfiles = { openProfilePicker(TvRoute.DNA) },
                         onBack = { returnFromTab(dnaReturnRoute) },
                     )
