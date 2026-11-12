@@ -1,6 +1,6 @@
 package com.vueo.tv.settings
 
-import com.vueo.tv.home.TiveoTopBarState
+import android.content.Context
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
@@ -42,6 +42,7 @@ import com.vueo.shared.core.storage.SubtitleVisibility
 import com.vueo.shared.core.storage.VueoBackupManager
 import com.vueo.tv.BuildConfig
 import com.vueo.tv.core.TvRuntime
+import com.vueo.tv.home.TiveoTopBarState
 import com.vueo.tv.ui.TvDesign
 import com.vueo.tv.ui.TvSidebarPreferences
 import com.vueo.tv.ui.TvSidebarStyle
@@ -72,6 +73,7 @@ internal enum class TvSettingsPage {
     SUBTITLES,
     SOURCES,
     APPEARANCE,
+    DEVELOPER_OPTIONS,
     MOTION,
     DATA_STORAGE,
     DIAGNOSTICS,
@@ -94,10 +96,20 @@ private val TvSettingsRootDestinations = listOf(
     TvSettingsRootDestination(TvSettingsPage.SUBTITLES, "subtitles", "Subtitles", "PLAYBACK"),
     TvSettingsRootDestination(TvSettingsPage.SOURCES, "sources", "Sources", "PLAYBACK"),
     TvSettingsRootDestination(TvSettingsPage.APPEARANCE, "appearance", "Appearance", "APP"),
-    TvSettingsRootDestination(TvSettingsPage.MOTION, "motion", "Motion · Temporary", "APP"),
     TvSettingsRootDestination(TvSettingsPage.DATA_STORAGE, "data-storage", "Data & Storage", "APP"),
     TvSettingsRootDestination(TvSettingsPage.ABOUT, "about", "About Tiveo", "APP"),
-    TvSettingsRootDestination(TvSettingsPage.DIAGNOSTICS, "diagnostics", "Diagnostics", "DIAGNOSTICS"),
+    TvSettingsRootDestination(TvSettingsPage.DEVELOPER_OPTIONS, "developer-options", "Developer options", "APP"),
+)
+
+private const val DEVELOPER_OPTIONS_ENABLED = "developer_options_enabled"
+private const val HIDDEN_SETTINGS_CATEGORIES = "developer_hidden_settings_categories"
+
+private val HideableSettingsPages = setOf(
+    TvSettingsPage.PROFILE,
+    TvSettingsPage.CONTENT_MANAGER,
+    TvSettingsPage.ENHANCEMENTS,
+    TvSettingsPage.DATA_STORAGE,
+    TvSettingsPage.VUEO_SYNC,
 )
 
 private fun TvSettingsPage.rootPage(): TvSettingsPage = when (this) {
@@ -111,6 +123,7 @@ private fun TvSettingsPage.rootPage(): TvSettingsPage = when (this) {
     TvSettingsPage.ENHANCEMENT_MDBLIST,
     TvSettingsPage.ENHANCEMENT_GEMINI,
     TvSettingsPage.PERSONALIZATION -> TvSettingsPage.ENHANCEMENTS
+    TvSettingsPage.MOTION, TvSettingsPage.DIAGNOSTICS -> TvSettingsPage.DEVELOPER_OPTIONS
     else -> this
 }
 
@@ -124,7 +137,9 @@ private fun TvSettingsPage.hasPanelParent(): Boolean = when (this) {
     TvSettingsPage.ENHANCEMENT_TMDB,
     TvSettingsPage.ENHANCEMENT_MDBLIST,
     TvSettingsPage.ENHANCEMENT_GEMINI,
-    TvSettingsPage.PERSONALIZATION -> true
+    TvSettingsPage.PERSONALIZATION,
+    TvSettingsPage.MOTION,
+    TvSettingsPage.DIAGNOSTICS -> true
     else -> false
 }
 
@@ -141,12 +156,43 @@ internal fun TvSettingsScreen(
     onDataChanged: () -> Unit = {},
     onResetComplete: () -> Unit = {},
 ) {
-    var page by remember { mutableStateOf(TvSettingsPage.PROFILE) }
+    val context = LocalContext.current
+    val preferences = remember(context) {
+        context.applicationContext.getSharedPreferences("vueo_tv_browse", Context.MODE_PRIVATE)
+    }
+    var developerOptionsEnabled by remember(preferences) {
+        mutableStateOf(preferences.getBoolean(DEVELOPER_OPTIONS_ENABLED, false))
+    }
+    var hiddenCategories by remember(preferences) {
+        mutableStateOf(preferences.getStringSet(HIDDEN_SETTINGS_CATEGORIES, emptySet()).orEmpty().toSet())
+    }
+    val visibleRoots = remember(developerOptionsEnabled, hiddenCategories) {
+        TvSettingsRootDestinations.filter { destination ->
+            if (destination.page == TvSettingsPage.DEVELOPER_OPTIONS) {
+                developerOptionsEnabled
+            } else {
+                destination.page !in HideableSettingsPages || destination.id !in hiddenCategories
+            }
+        }
+    }
+    var page by remember {
+        mutableStateOf(visibleRoots.firstOrNull { it.page == TvSettingsPage.PROFILE }?.page ?: visibleRoots.first().page)
+    }
     var panelAutoFocusToken by remember { mutableIntStateOf(0) }
 
-    val rootPage = page.rootPage()
-    val selectedRoot = TvSettingsRootDestinations.firstOrNull { it.page == rootPage }
-        ?: TvSettingsRootDestinations.first()
+    val selectedRoot = visibleRoots.firstOrNull { it.page == page.rootPage() } ?: visibleRoots.first()
+    val visiblePage = if (page.rootPage() == selectedRoot.page) page else selectedRoot.page
+
+    fun setDeveloperOptions(enabled: Boolean) {
+        developerOptionsEnabled = enabled
+        preferences.edit().putBoolean(DEVELOPER_OPTIONS_ENABLED, enabled).apply()
+    }
+
+    fun setCategoryHidden(id: String, hidden: Boolean) {
+        val updated = if (hidden) hiddenCategories + id else hiddenCategories - id
+        hiddenCategories = updated
+        preferences.edit().putStringSet(HIDDEN_SETTINGS_CATEGORIES, updated).apply()
+    }
 
     fun openPanel(next: TvSettingsPage) {
         page = next
@@ -154,7 +200,7 @@ internal fun TvSettingsScreen(
     }
 
     fun backPanel() {
-        page = when (page) {
+        page = when (visiblePage) {
             TvSettingsPage.CONTENT_PROVIDER_HEALTH -> TvSettingsPage.CONTENT_PROVIDERS
             TvSettingsPage.CONTENT_ADDONS,
             TvSettingsPage.CONTENT_PROVIDERS,
@@ -165,20 +211,21 @@ internal fun TvSettingsScreen(
             TvSettingsPage.ENHANCEMENT_MDBLIST,
             TvSettingsPage.ENHANCEMENT_GEMINI,
             TvSettingsPage.PERSONALIZATION -> TvSettingsPage.ENHANCEMENTS
-            else -> page
+            TvSettingsPage.MOTION, TvSettingsPage.DIAGNOSTICS -> TvSettingsPage.DEVELOPER_OPTIONS
+            else -> visiblePage
         }
         panelAutoFocusToken += 1
     }
 
     TvSettingsMasterDetailShell(
         active = active,
-        categories = TvSettingsRootDestinations.map { TvSettingsNavItem(it.id, it.title, it.section) },
+        categories = visibleRoots.map { TvSettingsNavItem(it.id, it.title, it.section) },
         selectedCategoryId = selectedRoot.id,
-        panelKey = page.name,
+        panelKey = visiblePage.name,
         panelAutoFocusToken = panelAutoFocusToken,
-        panelHasBack = page.hasPanelParent(),
+        panelHasBack = visiblePage.hasPanelParent(),
         onCategorySelected = { id ->
-            TvSettingsRootDestinations.firstOrNull { it.id == id }?.let { destination ->
+            visibleRoots.firstOrNull { it.id == id }?.let { destination ->
                 if (page != destination.page) page = destination.page
             }
         },
@@ -186,7 +233,7 @@ internal fun TvSettingsScreen(
         topBar = topBar,
         onBack = onBack,
     ) {
-        when (page) {
+        when (visiblePage) {
             TvSettingsPage.VUEO_SYNC -> TvVueoSyncSettings(onNavigate, onProfile, onBack)
             TvSettingsPage.PROFILE -> TvProfileSettings(
                 runtime = runtime,
@@ -250,17 +297,64 @@ internal fun TvSettingsScreen(
             TvSettingsPage.APPEARANCE -> TvAppearanceSettings(
                 runtime, onNavigate, onProfile, onBack
             )
-            TvSettingsPage.MOTION -> TvMotionSettings(onNavigate, onProfile, onBack)
+            TvSettingsPage.DEVELOPER_OPTIONS -> {
+                val entries = buildList {
+                    add(TvSettingsEntry(
+                        id = "developer-options-enabled",
+                        title = "Developer options",
+                        subtitle = "Turn off to hide this menu. Press Build number 7 times to open it again.",
+                        onActivate = {
+                            setDeveloperOptions(false)
+                            openPanel(TvSettingsPage.ABOUT)
+                        },
+                        switchChecked = true,
+                    ))
+                    TvSettingsRootDestinations.filter { it.page in HideableSettingsPages }.forEach { destination ->
+                        val hidden = destination.id in hiddenCategories
+                        add(TvSettingsEntry(
+                            id = "hide-${destination.id}",
+                            title = "Hide ${destination.title}",
+                            subtitle = "Hide this category from Settings.",
+                            section = "SETTINGS VISIBILITY",
+                            onActivate = { setCategoryHidden(destination.id, !hidden) },
+                            switchChecked = hidden,
+                        ))
+                    }
+                    add(TvSettingsEntry(
+                        id = "motion-tuning",
+                        title = "Motion Tuning",
+                        subtitle = "Adjust TV animations and transitions.",
+                        section = "TOOLS",
+                        onActivate = { openPanel(TvSettingsPage.MOTION) },
+                    ))
+                    add(TvSettingsEntry(
+                        id = "diagnostics",
+                        title = "Diagnostics",
+                        subtitle = "View crash, performance and provider diagnostics.",
+                        section = "TOOLS",
+                        onActivate = { openPanel(TvSettingsPage.DIAGNOSTICS) },
+                    ))
+                }
+                TvSettingsListScreen(
+                    "Developer options", "Customize what appears in Settings and access TV tools.",
+                    entries, onNavigate, onProfile, onBack,
+                )
+            }
+            TvSettingsPage.MOTION -> TvMotionSettings(onNavigate, onProfile, ::backPanel)
             TvSettingsPage.DATA_STORAGE -> TvDataStorageSettings(
                 runtime, onNavigate, onProfile, onDataChanged, onResetComplete, onBack
             )
             TvSettingsPage.DIAGNOSTICS -> TvDiagnosticsSettings(
                 onNavigate = onNavigate,
                 onProfile = onProfile,
-                onBack = onBack,
+                onBack = ::backPanel,
             )
             TvSettingsPage.ABOUT -> TvAboutSettings(
-                onNavigate, onProfile, onBack
+                onNavigate = onNavigate,
+                onProfile = onProfile,
+                onBack = onBack,
+                developerOptionsEnabled = developerOptionsEnabled,
+                onUnlockDeveloperOptions = { setDeveloperOptions(true) },
             )
         }
     }

@@ -178,9 +178,8 @@ internal fun TvSettingsMasterDetailShell(
         with(density) { (labelWidth + arrowWidth).toDp() } + 46.dp
     }
     val contentStartPadding = MODERN_HOME_CONTENT_START_PADDING
-    val categoryRequesters = remember(categories.map { it.id }) {
-        categories.associate { it.id to FocusRequester() }
-    }
+    val categoryRequesters = remember { mutableMapOf<String, FocusRequester>() }
+    categories.forEach { category -> categoryRequesters.getOrPut(category.id) { FocusRequester() } }
     val panelRequesters = remember { mutableMapOf<String, MutableMap<String, FocusRequester>>() }
     val panelFirstRowIds = remember { mutableMapOf<String, String>() }
     val panelLastFocusedIds = remember { mutableMapOf<String, String>() }

@@ -167,6 +167,8 @@ internal fun TvAboutSettings(
     onNavigate: (String) -> Unit,
     onProfile: () -> Unit,
     onBack: () -> Unit,
+    developerOptionsEnabled: Boolean,
+    onUnlockDeveloperOptions: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -174,6 +176,7 @@ internal fun TvAboutSettings(
     val installPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { restoreSettingsFocus() }
+    var buildNumberPresses by remember(developerOptionsEnabled) { mutableIntStateOf(0) }
     var checking by remember { mutableStateOf(false) }
     var downloading by remember { mutableStateOf(false) }
     var progress by remember { mutableIntStateOf(0) }
@@ -216,6 +219,24 @@ internal fun TvAboutSettings(
 
     val entries = listOf(
         TvSettingsEntry("vueo", "Tiveo", "A universal media player.", BuildConfig.VERSION_NAME, enabled = false, section = "ABOUT", icon = Icons.Default.Settings),
+        TvSettingsEntry(
+            id = "build-number",
+            title = "Build number",
+            subtitle = when {
+                developerOptionsEnabled -> "Developer options are enabled."
+                buildNumberPresses == 6 -> "1 step away from enabling Developer options."
+                buildNumberPresses in 4..5 -> "${7 - buildNumberPresses} steps away from enabling Developer options."
+                else -> "Installed build."
+            },
+            value = BuildConfig.VERSION_CODE.toString(),
+            onActivate = {
+                if (!developerOptionsEnabled) {
+                    buildNumberPresses += 1
+                    if (buildNumberPresses == 7) onUnlockDeveloperOptions()
+                }
+            },
+            section = "ABOUT",
+        ),
         TvSettingsEntry("privacy", "Privacy", "Settings and API keys stay on this device. API keys are excluded from backups unless you include them.", "Local", enabled = false, section = "ABOUT"),
         TvSettingsEntry("tmdb", "TMDB Attribution", "This product uses the TMDB API but is not endorsed or certified by TMDB.", "TMDB", enabled = false, section = "ABOUT"),
         TvSettingsEntry(
