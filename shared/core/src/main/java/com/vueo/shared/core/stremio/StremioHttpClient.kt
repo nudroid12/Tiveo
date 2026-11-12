@@ -31,7 +31,7 @@ object DefaultStremioHttpClient : StremioHttpClient {
 
     override suspend fun get(url: String): String {
         require(StremioUrls.isHttpUrl(url)) {
-            "VUEO addon requests require HTTP or HTTPS."
+            "Tiveo addon requests require HTTP or HTTPS."
         }
 
         val request = Request.Builder()

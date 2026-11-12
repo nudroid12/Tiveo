@@ -474,7 +474,7 @@ object RuntimeDiagnostics {
             val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
                 put(MediaStore.MediaColumns.MIME_TYPE, "application/zip")
-                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/VUEO")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Tiveo")
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
             val uri = requireNotNull(resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)) {
@@ -487,7 +487,7 @@ object RuntimeDiagnostics {
                 values.clear()
                 values.put(MediaStore.MediaColumns.IS_PENDING, 0)
                 resolver.update(uri, values, null, null)
-                return DiagnosticSaveResult(displayName, "Downloads/VUEO")
+                return DiagnosticSaveResult(displayName, "Downloads/Tiveo")
             } catch (error: Throwable) {
                 runCatching { resolver.delete(uri, null, null) }
                 throw error
@@ -495,7 +495,7 @@ object RuntimeDiagnostics {
         }
 
         val root = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS) ?: context.filesDir
-        val directory = File(root, "VUEO").apply { mkdirs() }
+        val directory = File(root, "Tiveo").apply { mkdirs() }
         val destination = File(directory, displayName)
         destination.outputStream().buffered().use { output ->
             writeDiagnosticZip(output, summary, raw, metadata, crashReport, tombstone)

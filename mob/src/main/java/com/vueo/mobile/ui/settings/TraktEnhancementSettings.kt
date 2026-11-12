@@ -287,7 +287,7 @@ internal fun TraktEnhancementSettingsScreen(onBack: () -> Unit) {
             }
         }
         item(key = "trakt-note") {
-            VueoCompactInfo("Optional by design", "Account settings apply to the current VUEO profile. Choose your recommendation engine in Enhancements. Data from Trakt.tv.")
+            VueoCompactInfo("Optional by design", "Account settings apply to the current Tiveo profile. Choose your recommendation engine in Enhancements. Data from Trakt.tv.")
         }
     }
 }

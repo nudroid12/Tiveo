@@ -602,7 +602,7 @@ internal fun TvSettingsProfilePanel(
             fontWeight = FontWeight.Bold,
         )
         Text(
-            text = "Your VUEO profile and local taste at a glance.",
+            text = "Your Tiveo profile and local taste at a glance.",
             color = TvDesign.Muted,
             fontSize = 13.sp,
             lineHeight = 17.sp,

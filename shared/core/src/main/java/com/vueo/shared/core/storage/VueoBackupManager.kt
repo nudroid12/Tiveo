@@ -164,18 +164,18 @@ object VueoBackupManager {
         val decoded = withContext(Dispatchers.IO) {
             val input = appContext.contentResolver
                 .openInputStream(uri)
-                ?: error("Unable to open the selected VUEO backup.")
+                ?: error("Unable to open the selected Tiveo backup.")
 
             val raw = input.bufferedReader(Charsets.UTF_8).use { it.readText() }
             val root = JSONObject(raw)
 
             require(root.optString("format") == FORMAT) {
-                "This file is not a VUEO backup."
+                "This file is not a compatible app backup."
             }
 
             val schema = root.optInt("schemaVersion", -1)
             require(schema in 1..CURRENT_SCHEMA_VERSION) {
-                "Unsupported VUEO backup schema $schema."
+                "Unsupported Tiveo backup schema $schema."
             }
 
             val groups = root.optJSONObject("preferences")

@@ -7,6 +7,7 @@ import android.os.Build
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import com.vueo.mobile.BuildConfig
+import com.vueo.shared.core.update.tiveoReleaseDisplayText
 import com.vueo.mobile.core.stremio.SimpleHttp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -76,13 +77,14 @@ data class VueoUpdateRelease(
                 title =
                     json.optString(
                         "title",
-                        "VUEO $name",
-                    ),
+                        "Tiveo $name",
+                    ).tiveoReleaseDisplayText(),
                 changelog =
                     json.optJSONArray(
                         "changelog"
                     )
-                        .toStringList(),
+                        .toStringList()
+                        .map { it.tiveoReleaseDisplayText() },
                 downloadUrl =
                     json.optHttpsUrl(
                         "downloadUrl"
@@ -221,14 +223,14 @@ object VueoUpdateManager {
     private const val UPDATE_DIR =
         "updates"
     private const val APK_NAME =
-        "VUEO-update.apk"
+        "Tiveo-update.apk"
 
     suspend fun check(
         context: Context,
         force: Boolean = false,
     ): VueoUpdateCheckResult {
         if (DEFAULT_MANIFEST_URL.isBlank()) {
-            return VueoUpdateCheckResult(null, 0L, false, "Virio updates are not configured.")
+            return VueoUpdateCheckResult(null, 0L, false, "Tiveo updates are not configured.")
         }
         val appContext =
             context.applicationContext
@@ -380,7 +382,7 @@ object VueoUpdateManager {
                     )
                 ) {
                     error(
-                        "Allow VUEO to install unknown apps first."
+                        "Allow Tiveo to install unknown apps first."
                     )
                 }
 

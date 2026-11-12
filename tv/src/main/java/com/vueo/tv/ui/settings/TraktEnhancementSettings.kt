@@ -244,6 +244,6 @@ internal fun TvTraktEnhancementSettings(
     TvSettingsListScreen(
         title = "Trakt", subtitle = "Your account, discovery and viewing activity.",
         entries = entries, onNavigate = onNavigate, onProfile = onProfile, onBack = onBack,
-        footer = "Account settings apply to the current VUEO profile. Choose your recommendation engine in Enhancements. Data from Trakt.tv.",
+        footer = "Account settings apply to the current Tiveo profile. Choose your recommendation engine in Enhancements. Data from Trakt.tv.",
     )
 }

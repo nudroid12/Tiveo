@@ -34,7 +34,7 @@ object CollectionJson {
     fun decode(text: String): List<Collection> {
         require(text.toByteArray(Charsets.UTF_8).size <= MAX_BYTES) { "Collections exceed 1 MiB" }
         val root = JSONObject(text)
-        require(root.getString("format") == "vueo-collections" && root.getInt("version") == VERSION) { "Use a VUEO collections export (version 1)" }
+        require(root.getString("format") == "vueo-collections" && root.getInt("version") == VERSION) { "Use a compatible collections export (version 1)" }
         val array = root.getJSONArray("collections")
         val result = (0 until array.length()).map { i ->
             val c = array.getJSONObject(i)

@@ -268,7 +268,7 @@ private fun UserDnaHeader(
 
             Text(
                 text =
-                    "Your taste, built locally from how you use VUEO.",
+                    "Your taste, built locally from how you use Tiveo.",
                 color =
                     VueoPalette.Muted,
                 fontSize = 11.sp,
@@ -572,7 +572,7 @@ private fun UserDnaStartingCard() {
 
             Text(
                 text =
-                    "Watch a few titles and add things you like to Watchlist. VUEO will build this profile automatically as your taste becomes clearer.",
+                    "Watch a few titles and add things you like to Watchlist. Tiveo will build this profile automatically as your taste becomes clearer.",
                 color =
                     VueoPalette.Muted,
                 fontSize = 12.sp,
@@ -1047,7 +1047,7 @@ private fun UserDnaReadiness
     .supportingText(): String =
     when (this) {
         UserDnaReadiness.STARTING ->
-            "VUEO needs a few more taste signals."
+            "Tiveo needs a few more taste signals."
 
         UserDnaReadiness.LEARNING ->
             "Your early preferences are starting to appear."
@@ -1056,5 +1056,5 @@ private fun UserDnaReadiness
             "Your taste profile is becoming more reliable."
 
         UserDnaReadiness.STRONG ->
-            "VUEO has a strong local picture of your taste."
+            "Tiveo has a strong local picture of your taste."
     }

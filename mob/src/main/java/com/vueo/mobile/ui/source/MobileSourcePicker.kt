@@ -581,7 +581,7 @@ internal fun SourcePickerScreen(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                "VUEO RECOMMENDS",
+                                "Tiveo RECOMMENDS",
                                 modifier = Modifier.weight(1f),
                                 color = VueoPalette.Accent,
                                 fontWeight = FontWeight.Black,
@@ -678,7 +678,7 @@ internal fun SourcePickerScreen(
                         if (streams.isEmpty()) {
                             "No sources were returned for this title. Pull down to refresh."
                         } else {
-                            "Sources were found, but none are directly playable by the current VUEO player. Pull down to refresh."
+                            "Sources were found, but none are directly playable by the current Tiveo player. Pull down to refresh."
                         },
                         modifier = Modifier.padding(16.dp),
                         color = VueoPalette.Muted,
@@ -1027,7 +1027,7 @@ private fun SourceActivityLogDialog(
                             ) as ClipboardManager
                             clipboard.setPrimaryClip(
                                 ClipData.newPlainText(
-                                    "VUEO source activity log",
+                                    "Tiveo source activity log",
                                     buildSourceActivityExport(
                                         mediaTitle,
                                         progressText,
@@ -1061,7 +1061,7 @@ private fun buildSourceActivityExport(
     progressText: String,
     entries: List<SourceDiscoveryActivity>,
 ): String = buildString {
-    appendLine("VUEO Source Activity Log")
+    appendLine("Tiveo Source Activity Log")
     appendLine("Title: $mediaTitle")
     appendLine("Status: $progressText")
     appendLine()

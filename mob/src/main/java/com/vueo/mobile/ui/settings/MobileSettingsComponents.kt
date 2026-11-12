@@ -104,7 +104,7 @@ internal fun vueoBackupFileName(): String {
         Locale.US,
     ).format(Date())
 
-    return "VUEO-backup-$stamp.json"
+    return "Tiveo-backup-$stamp.json"
 }
 
 internal enum class SubtitleLanguageTarget {
@@ -318,7 +318,7 @@ internal fun VueoSettingsTitle(
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         Text(
-            "VUEO",
+            "Tiveo",
             color = Color.White,
             fontSize = 10.sp,
             fontWeight = FontWeight.SemiBold,
@@ -378,7 +378,7 @@ internal fun vueoViewingClass(
 ): String =
     when {
         watchedTitles < 10 ->
-            "Baby VUEO"
+            "Baby Tiveo"
 
         watchedTitles < 30 ->
             "Explorer"
@@ -393,7 +393,7 @@ internal fun vueoViewingClass(
             "Screen Veteran"
 
         else ->
-            "VUEO Legend"
+            "Tiveo Legend"
     }
 
 internal fun vueoDnaClass(

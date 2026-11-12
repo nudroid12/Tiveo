@@ -42,7 +42,7 @@ object VueoDataMigration {
                     .putInt(KEY_SCHEMA_VERSION, version)
                     .commit()
             ) {
-                "Unable to persist VUEO data schema version."
+                "Unable to persist Tiveo data schema version."
             }
         }
     }

@@ -7,7 +7,7 @@ object PluginRepositoryClient {
     suspend fun fetch(inputUrl: String): PluginRepositoryDescriptor {
         val manifestUrl = normalizeManifestUrl(inputUrl)
         require(manifestUrl.startsWith("https://")) {
-            "VUEO requires an HTTPS plugin repository URL."
+            "Tiveo requires an HTTPS plugin repository URL."
         }
 
         val json = JSONObject(PluginHttp.getText(manifestUrl))

@@ -81,7 +81,7 @@ internal fun GeminiEnhancementSettingsScreen(onBack: () -> Unit) {
 
     VueoSettingsPage(
         title = "Gemini",
-        subtitle = "Your own API key for VUEO SmartSubs.",
+        subtitle = "Your own API key for Tiveo SmartSubs.",
         onBack = onBack,
     ) {
         item {
@@ -93,7 +93,7 @@ internal fun GeminiEnhancementSettingsScreen(onBack: () -> Unit) {
                     modifier = Modifier.fillMaxWidth().padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("VUEO SmartSubs", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("Tiveo SmartSubs", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                     Text(
                         text = status ?: when {
                             edited -> "Unsaved changes"
@@ -106,7 +106,7 @@ internal fun GeminiEnhancementSettingsScreen(onBack: () -> Unit) {
                         fontSize = 13.sp,
                     )
                     Text(
-                        "Uses your Gemini quota. Subtitle translation runs on VUEO SmartSubs.",
+                        "Uses your Gemini quota. Subtitle translation runs on Tiveo SmartSubs.",
                         color = VueoPalette.Muted,
                         fontSize = 12.sp,
                     )
@@ -153,7 +153,7 @@ internal fun GeminiEnhancementSettingsScreen(onBack: () -> Unit) {
                             }
                         }) { Text(if (testing) "Connecting…" else "Test Connection") }
                     }
-                    Text("Test Connection saves these settings and checks your key/model through VUEO SmartSubs. Uses a small amount of Gemini quota.")
+                    Text("Test Connection saves these settings and checks your key/model through Tiveo SmartSubs. Uses a small amount of Gemini quota.")
                 }
             }
         }

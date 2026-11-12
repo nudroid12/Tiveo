@@ -7,6 +7,7 @@ import android.os.Build
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import com.vueo.tv.BuildConfig
+import com.vueo.shared.core.update.tiveoReleaseDisplayText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -65,7 +66,7 @@ object TvUpdateManager {
 
     suspend fun check(context: Context, force: Boolean = false): TvUpdateCheckResult = withContext(Dispatchers.IO) {
         if (DEFAULT_MANIFEST_URL.isBlank()) {
-            return@withContext TvUpdateCheckResult(null, 0L, "Virio updates are not configured.")
+            return@withContext TvUpdateCheckResult(null, 0L, "Tiveo updates are not configured.")
         }
         val appContext = context.applicationContext
         val store = TvUpdateStore(appContext)
@@ -121,9 +122,9 @@ object TvUpdateManager {
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val appContext = context.applicationContext
-            if (needsInstallPermission(appContext)) error("Allow VUEO to install unknown apps first.")
+            if (needsInstallPermission(appContext)) error("Allow Tiveo to install unknown apps first.")
             val url = release.downloadUrl ?: error("This update does not include an APK download.")
-            val target = File(File(appContext.cacheDir, "updates").apply { mkdirs() }, "VUEO-TV-update.apk")
+            val target = File(File(appContext.cacheDir, "updates").apply { mkdirs() }, "Tiveo-TV-update.apk")
             download(url, target, onProgress)
             verifySha256(target, release.sha256)
             val info = appContext.packageManager.getPackageArchiveInfo(target.absolutePath, 0)
@@ -200,8 +201,8 @@ private fun parseRelease(json: JSONObject): TvUpdateRelease? {
     return TvUpdateRelease(
         versionCode = versionCode,
         versionName = versionName,
-        title = json.optString("title", "VUEO $versionName"),
-        changelog = json.optJSONArray("changelog").toStringList(),
+        title = json.optString("title", "Tiveo $versionName").tiveoReleaseDisplayText(),
+        changelog = json.optJSONArray("changelog").toStringList().map { it.tiveoReleaseDisplayText() },
         downloadUrl = json.optString("downloadUrl").trim().takeIf { it.startsWith("https://") },
         sha256 = json.optString("sha256").trim().lowercase().takeIf { it.matches(Regex("[0-9a-f]{64}")) },
         publishedAt = json.optString("publishedAt").takeIf(String::isNotBlank),

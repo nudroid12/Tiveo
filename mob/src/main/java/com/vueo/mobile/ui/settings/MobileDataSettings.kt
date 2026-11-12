@@ -233,11 +233,11 @@ internal fun DataStorageSettingsScreen(
                 }
             },
             title = {
-                Text("Restore VUEO backup?")
+                Text("Restore Tiveo backup?")
             },
             text = {
                 Text(
-                    "Current VUEO profiles, configuration, Library and playback progress will be replaced by the selected backup. Temporary caches are rebuilt automatically."
+                    "Current Tiveo profiles, configuration, Library and playback progress will be replaced by the selected backup. Temporary caches are rebuilt automatically."
                 )
             },
             confirmButton = {
@@ -262,7 +262,7 @@ internal fun DataStorageSettingsScreen(
                                     append("Backup restored")
                                     summary.sourceVersion
                                         ?.let {
-                                            append(" from VUEO ")
+                                            append(" from app version ")
                                             append(it)
                                         }
                                     append(". ")
@@ -309,7 +309,7 @@ internal fun DataStorageSettingsScreen(
                 }
             },
             title = {
-                Text("Reset VUEO data?")
+                Text("Reset Tiveo data?")
             },
             text = {
                 Text(
@@ -331,11 +331,11 @@ internal fun DataStorageSettingsScreen(
                                 onPersistentDataChanged()
                             }.onSuccess {
                                 includeCredentials = false
-                                feedback = "VUEO data reset to a fresh state."
+                                feedback = "Tiveo data reset to a fresh state."
                                 showResetConfirm = false
                             }.onFailure { error ->
                                 feedback = error.message
-                                    ?: "Unable to reset VUEO data."
+                                    ?: "Unable to reset Tiveo data."
                             }
 
                             busy = false
@@ -382,7 +382,7 @@ internal fun DataStorageSettingsScreen(
             item {
                 VueoInfoCard(
                     title = "Working",
-                    text = "Keep VUEO open while this data operation finishes.",
+                    text = "Keep Tiveo open while this data operation finishes.",
                 )
             }
         }
@@ -414,9 +414,9 @@ internal fun DataStorageSettingsScreen(
             VueoSettingsActionCard(
                 title = "Create Backup",
                 subtitle = if (includeCredentials) {
-                    "Export VUEO data as JSON. This backup will include configured API keys."
+                    "Export Tiveo data as JSON. This backup will include configured API keys."
                 } else {
-                    "Export VUEO data as JSON without API keys."
+                    "Export Tiveo data as JSON without API keys."
                 },
                 action = "Export",
                 onClick = {
@@ -432,7 +432,7 @@ internal fun DataStorageSettingsScreen(
         item {
             VueoSettingsActionCard(
                 title = "Restore Backup",
-                subtitle = "Choose a VUEO JSON backup. Restored sources are reloaded without requiring an app reinstall.",
+                subtitle = "Choose a Tiveo JSON backup. Restored sources are reloaded without requiring an app reinstall.",
                 action = "Restore",
                 onClick = {
                     if (!busy) {
@@ -510,7 +510,7 @@ internal fun DataStorageSettingsScreen(
 
         item {
             VueoSettingsActionCard(
-                title = "Reset VUEO Data",
+                title = "Reset Tiveo Data",
                 subtitle = "Return local configuration and Library data to a fresh state without uninstalling the APK.",
                 action = "Reset",
                 onClick = {
@@ -543,7 +543,7 @@ internal fun AboutVueoSettingsScreen(
         if (availableRelease != null) {
             if (VueoUpdateManager.needsInstallPermission(context)) {
                 VueoUpdateManager.openInstallPermissionSettings(context)
-                updateMessage = "Allow installs for VUEO, then tap Update again."
+                updateMessage = "Allow installs for Tiveo, then tap Update again."
                 return@updateAction
             }
 
@@ -575,7 +575,7 @@ internal fun AboutVueoSettingsScreen(
             updateMessage = when {
                 result.error != null -> result.error
                 result.release?.isNewerThanCurrent() == true ->
-                    "VUEO ${result.release.versionName} is ready to install."
+                    "Tiveo ${result.release.versionName} is ready to install."
                 else -> "You're up to date."
             }
         }

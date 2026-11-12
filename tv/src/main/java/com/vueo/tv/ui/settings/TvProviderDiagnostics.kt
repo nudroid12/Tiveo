@@ -500,7 +500,7 @@ internal fun TvRuntimeDiagnosticsDialog(
                             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                             clipboard?.setPrimaryClip(
                                 ClipData.newPlainText(
-                                    if (showRaw) "VUEO raw diagnostic" else "VUEO diagnostic summary",
+                                    if (showRaw) "Tiveo raw diagnostic" else "Tiveo diagnostic summary",
                                     fullText,
                                 )
                             )
@@ -930,7 +930,7 @@ internal fun TvPerformanceDiagnosticsDialog(
                             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                             clipboard?.setPrimaryClip(
                                 ClipData.newPlainText(
-                                    "VUEO ${diagnostics.kind} ${if (showRaw) "raw" else "summary"} ${selectedTab.label}",
+                                    "Tiveo ${diagnostics.kind} ${if (showRaw) "raw" else "summary"} ${selectedTab.label}",
                                     fullText,
                                 )
                             )
@@ -1104,7 +1104,7 @@ private fun providerDiagnosticFullLog(
     currentlyEnabled: Boolean,
     providerCodeReady: Boolean,
 ): String = buildString {
-    appendLine("VUEO Provider Debug Log")
+    appendLine("Tiveo Provider Debug Log")
     appendLine("Provider: ${provider.name} v${provider.version}")
     appendLine("Status: ${if (currentlyEnabled) ProviderDiagnosticSummary.statusLabel(health) else "Disabled (last ${ProviderDiagnosticSummary.statusLabel(health)})"}")
     providerRequestLabelOrNull(health)?.let { appendLine("Request: $it") }
@@ -1173,7 +1173,7 @@ private fun sanitizeDiagnosticUrl(url: String): String {
 
 private fun copyProviderDiagnostic(context: Context, text: String) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-    clipboard?.setPrimaryClip(ClipData.newPlainText("VUEO provider diagnostic", text))
+    clipboard?.setPrimaryClip(ClipData.newPlainText("Tiveo provider diagnostic", text))
     Toast.makeText(context, "Debug log copied", Toast.LENGTH_SHORT).show()
 }
 

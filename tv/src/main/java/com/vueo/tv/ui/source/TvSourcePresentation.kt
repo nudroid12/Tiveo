@@ -626,7 +626,7 @@ private fun SourceResultsSection(
                         message = if (state.bundle?.sources.orEmpty().isEmpty()) {
                             "No sources were returned for this title."
                         } else {
-                            "Sources were found, but none can be played directly by VUEO."
+                            "Sources were found, but none can be played directly by Tiveo."
                         },
                         actionLabel = "Retry",
                         actionRequester = retryRequester,

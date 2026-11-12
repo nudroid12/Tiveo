@@ -396,7 +396,7 @@ internal fun VueoSettingsHub(
                 vueoScreenForwardTransition()
             }
         },
-        label = "VUEO settings personalization transition",
+        label = "Tiveo settings personalization transition",
         modifier = Modifier.fillMaxSize(),
     ) { surface ->
         when (surface) {

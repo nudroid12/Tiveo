@@ -38,7 +38,7 @@ internal fun TvMotionSettings(
     val context = LocalContext.current.applicationContext
     var group by TvMotionBubble.selectedGroup
     var preview by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf("Changes apply live. Save keeps them after restarting VUEO.") }
+    var status by remember { mutableStateOf("Changes apply live. Save keeps them after restarting Tiveo.") }
     val restoreAfterExport = rememberTvSettingsDeferredFocusRestore()
     val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         restoreAfterExport()
@@ -103,7 +103,7 @@ internal fun TvMotionSettings(
         }
         add(TvSettingsEntry("motion-preview", "Preview / Replay", "Try the selected motion here; navigate normally to test it on the real pages.", "Open", onActivate = { preview = true }, section = "TEST & SAVE"))
         add(TvSettingsEntry("motion-save", "Save All Values", "Keep all live trial values on this TV after restart.", "Save", onActivate = { TvMotionTuning.save(context); status = "All motion values saved." }))
-        add(TvSettingsEntry("motion-export", "Export Trial Values", "Save a JSON copy of your trial values for applying the final motion later.", "Export", onActivate = { export.launch("VUEO-TV-Motion.json") }))
+        add(TvSettingsEntry("motion-export", "Export Trial Values", "Save a JSON copy of your trial values for applying the final motion later.", "Export", onActivate = { export.launch("Tiveo-TV-Motion.json") }))
         add(TvSettingsEntry("motion-reset-component", "Reset This Component", "Return ${group.title} to Original.", "Reset", onActivate = { TvMotionTuning.reset(group); status = "Component reset to Original. Save to keep." }))
         add(TvSettingsEntry("motion-reset-all", "Reset All Motion", "Restore originals and remove saved trial values.", "Reset", onActivate = { TvMotionTuning.resetAll(context); status = "Original motion restored. Saved trial values removed." }))
         add(TvSettingsEntry("motion-status", "Status", status, enabled = false, section = "STATUS"))
@@ -137,7 +137,7 @@ private fun TvMotionPreview(group: TvMotionGroup, onDismiss: () -> Unit) {
                         scaleX = scale; scaleY = scale
                         alpha = if (group == TvMotionGroup.HERO || group == TvMotionGroup.IMAGE) progress.coerceIn(0f, 1f) else 1f
                     }.background(TvDesign.Accent, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
-                        Text("VUEO", color = TvDesign.Black, fontSize = 24.sp)
+                        Text("Tiveo", color = TvDesign.Black, fontSize = 24.sp)
                     }
                 } else {
                     val recipe = when (group) {
@@ -150,7 +150,7 @@ private fun TvMotionPreview(group: TvMotionGroup, onDismiss: () -> Unit) {
                     }
                     androidx.compose.animation.AnimatedVisibility(showing, enter = recipe.targetContentEnter, exit = recipe.initialContentExit) {
                         Box(Modifier.size(260.dp, 110.dp).background(TvDesign.Accent, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
-                            Text("VUEO", color = TvDesign.Black, fontSize = 24.sp)
+                            Text("Tiveo", color = TvDesign.Black, fontSize = 24.sp)
                         }
                     }
                 }

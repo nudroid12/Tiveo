@@ -81,7 +81,7 @@ internal fun VueoSyncSettingsScreen(onBack: () -> Unit, returnHint: String? = nu
                     },
                 )
             } else {
-                VueoStatusCard("VUEO Account", "Not connected",
+                VueoStatusCard("Tiveo Account", "Not connected",
                     "Sign in to bring your library and connections to this device.")
             }
         }
@@ -125,7 +125,7 @@ private fun VueoConnectedAccountCard(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text("VUEO Account", color = Color.White,
+                    Text("Tiveo Account", color = Color.White,
                         fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold)
                     Text(email, color = VueoPalette.Muted, fontSize = 11.sp, lineHeight = 15.sp,
                         maxLines = 2, overflow = TextOverflow.Ellipsis)

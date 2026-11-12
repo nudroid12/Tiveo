@@ -154,7 +154,7 @@ internal fun PersonalizationSettingsScreen(
     VueoSettingsPage(
         title = "Personalization",
         subtitle =
-            "Local, per-profile controls for how VUEO adapts to you.",
+            "Local, per-profile controls for how Tiveo adapts to you.",
         onBack = onBack,
     ) {
         item(key = "personalization-profile") {
@@ -345,7 +345,7 @@ internal fun EnhancementsSettingsScreen(
             VueoSettingsHubGroup(label = "SUBTITLES") {
                 VueoSettingsHubRow(
                     title = "Gemini",
-                    subtitle = "Your own API key for VUEO SmartSubs.",
+                    subtitle = "Your own API key for Tiveo SmartSubs.",
                     status = if (smartSubs.connected) "Connected" else if (smartSubs.apiKey.isNotBlank()) "Configured" else "Not configured",
                     icon = Icons.Default.SettingsInputComponent,
                     onClick = onGemini,
@@ -356,7 +356,7 @@ internal fun EnhancementsSettingsScreen(
         item(key = "enhancements-note") {
             VueoCompactInfo(
                 title = "Optional by design",
-                text = "VUEO core playback, Library and local Personalization continue to work without these services.",
+                text = "Tiveo core playback, Library and local Personalization continue to work without these services.",
             )
         }
     }
@@ -414,7 +414,7 @@ internal fun TmdbEnhancementSettingsScreen(
                     } else {
                         "Not configured"
                     },
-                text = "The key is stored locally on this device. VUEO core does not depend on TMDB.",
+                text = "The key is stored locally on this device. Tiveo core does not depend on TMDB.",
             )
         }
 
@@ -583,7 +583,7 @@ internal fun TmdbEnhancementSettingsScreen(
         item {
             VueoInfoCard(
                 title = "Discovery connection",
-                text = "TMDB now enriches Details metadata and powers More Like This with Recommendations, Similar titles, and the VUEO catalog fallback.",
+                text = "TMDB now enriches Details metadata and powers More Like This with Recommendations, Similar titles, and the Tiveo catalog fallback.",
             )
         }
     }
@@ -641,7 +641,7 @@ internal fun MdblistEnhancementSettingsScreen(
                     } else {
                         "Not configured"
                     },
-                text = "MDBList is optional. Without it, VUEO simply shows the information available from core metadata sources.",
+                text = "MDBList is optional. Without it, Tiveo simply shows the information available from core metadata sources.",
             )
         }
 
@@ -834,7 +834,7 @@ internal fun MdblistEnhancementSettingsScreen(
         item {
             VueoInfoCard(
                 title = "Ratings connection",
-                text = "MDBList ratings now appear on Details when configured. VUEO fetches one rating bundle and shows only the rating sources you enable.",
+                text = "MDBList ratings now appear on Details when configured. Tiveo fetches one rating bundle and shows only the rating sources you enable.",
             )
         }
     }

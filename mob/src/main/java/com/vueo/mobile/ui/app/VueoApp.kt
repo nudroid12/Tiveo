@@ -791,7 +791,7 @@ fun VueoApp(
             }
         },
         modifier = Modifier.fillMaxSize(),
-        label = "VUEO app surface transition",
+        label = "Tiveo app surface transition",
     ) { surface ->
         when (surface) {
             AppSurface.STARTUP -> {
@@ -1068,7 +1068,7 @@ fun VueoApp(
                     vueoTabCrossTransition()
                 },
                 modifier = Modifier.fillMaxSize(),
-                label = "VUEO main navigation transition",
+                label = "Tiveo main navigation transition",
             ) { (currentTab, currentSettingsPage) ->
                 when (currentTab) {
                 AppTab.HOME -> key(homeStateKey) {
@@ -1514,7 +1514,7 @@ private fun RowScope.ProfileBottomTab(
             durationMillis = VueoMotion.QUICK_MS,
             easing = VueoMotion.EaseOut,
         ),
-        label = "VUEO profile tab avatar size",
+        label = "Tiveo profile tab avatar size",
     )
     val profileBorderWidth by animateDpAsState(
         targetValue = if (profileTabSelected) 2.dp else 1.dp,
@@ -1522,7 +1522,7 @@ private fun RowScope.ProfileBottomTab(
             durationMillis = VueoMotion.QUICK_MS,
             easing = VueoMotion.EaseOut,
         ),
-        label = "VUEO profile tab border width",
+        label = "Tiveo profile tab border width",
     )
     val profileBorderColor by animateColorAsState(
         targetValue =
@@ -1535,7 +1535,7 @@ private fun RowScope.ProfileBottomTab(
             durationMillis = VueoMotion.QUICK_MS,
             easing = VueoMotion.EaseOut,
         ),
-        label = "VUEO profile tab border color",
+        label = "Tiveo profile tab border color",
     )
 
     NavigationBarItem(

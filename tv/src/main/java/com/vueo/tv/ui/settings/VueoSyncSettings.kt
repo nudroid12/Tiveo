@@ -36,11 +36,11 @@ internal fun TvVueoSyncSettings(onNavigate: (String)->Unit,onProfile: ()->Unit,o
             if(connected) "Connected" else "Not connected",enabled=false,section="ACCOUNT"))
         add(TvSettingsEntry("message","Account Sync",if(message.isBlank() || message==status) status else "$message\n$status",enabled=false))
         if(!connected) {
-            add(TvSettingsEntry("email","Email","Your VUEO account email.",email,enabled=!busy,onActivate={edit="email"}))
-            add(TvSettingsEntry("password","Password","Your VUEO account password.",if(password.isBlank()) "Not set" else "••••••••",enabled=!busy,onActivate={edit="password"}))
+            add(TvSettingsEntry("email","Email","Your Tiveo account email.",email,enabled=!busy,onActivate={edit="email"}))
+            add(TvSettingsEntry("password","Password","Your Tiveo account password.",if(password.isBlank()) "Not set" else "••••••••",enabled=!busy,onActivate={edit="password"}))
             add(TvSettingsEntry("sign-in","Sign In","Connect this TV to your account.",enabled=!busy && email.isNotBlank() && password.isNotBlank(),
                 onActivate={action { service.signIn(email,password) }}))
-            add(TvSettingsEntry("register","Create Account","Create a VUEO account with the email and password entered above.",
+            add(TvSettingsEntry("register","Create Account","Create a Tiveo account with the email and password entered above.",
                 enabled=!busy && email.isNotBlank() && password.isNotBlank(),onActivate={action { service.signIn(email,password,true) }}))
         } else {
             add(TvSettingsEntry("sync-all", if(syncOn) "Sync On" else "Sync Off",

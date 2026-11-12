@@ -111,7 +111,7 @@ object SimpleHttp {
                 "https://"
             )
         ) {
-            "VUEO network requests require HTTPS."
+            "Tiveo network requests require HTTPS."
         }
 
         val request =

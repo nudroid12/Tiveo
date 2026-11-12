@@ -203,7 +203,7 @@ fun TvUpdatePrompt(
                         onClick = {
                             if (!downloading) {
                                 if (TvUpdateManager.needsInstallPermission(context)) {
-                                    status = "Allow installs for VUEO, then return and choose Update again."
+                                    status = "Allow installs for Tiveo, then return and choose Update again."
                                     TvUpdateManager.openInstallPermissionSettings(context.applicationContext)
                                 } else {
                                     downloading = true

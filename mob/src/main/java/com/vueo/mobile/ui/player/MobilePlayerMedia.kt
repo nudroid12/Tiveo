@@ -305,7 +305,7 @@ internal fun friendlyPlaybackError(
             "Network is unreachable",
             ignoreCase = true,
         ) ->
-            "VUEO could not reach the stream server. Check your connection or choose another source."
+            "Tiveo could not reach the stream server. Check your connection or choose another source."
 
         diagnostic
             .contains(

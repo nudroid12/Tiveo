@@ -857,7 +857,7 @@ internal fun EmptyHomeCard(
                 text =
                     when {
                         error != null ->
-                            "VUEO could not load a catalog right now. Open Content Manager to review your addon."
+                            "Tiveo could not load a catalog right now. Open Content Manager to review your addon."
 
                         hasAddons ->
                             "The installed addon does not expose a catalog that can load without extra filters."

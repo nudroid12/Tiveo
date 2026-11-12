@@ -32,7 +32,7 @@ object MetadataHttp {
     suspend fun get(url: String): String =
         withContext(Dispatchers.IO) {
             require(url.startsWith("https://", ignoreCase = true)) {
-                "VUEO metadata requests require HTTPS."
+                "Tiveo metadata requests require HTTPS."
             }
 
             val request =

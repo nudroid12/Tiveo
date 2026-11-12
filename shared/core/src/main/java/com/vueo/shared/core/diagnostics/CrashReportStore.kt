@@ -126,7 +126,7 @@ object CrashReportStore {
             else -> "${root.javaClass.simpleName}: ${sanitize(root.message.orEmpty().take(1200)).take(240)}"
         }
         val details = buildString {
-            appendLine("VUEO Crash Report")
+            appendLine("Tiveo Crash Report")
             appendLine("Package: ${context.packageName}")
             appendLine("Version: $currentVersion")
             appendLine("Android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
@@ -189,7 +189,7 @@ object CrashReportStore {
         val nativeEvidence = if (exit.reason == ApplicationExitInfo.REASON_CRASH_NATIVE) NativeCrashEvidence.read(nativeTombstoneFile(context)) else null
         if (nativeEvidence != null) summary = nativeEvidence.headline
         val details = buildString {
-            appendLine("VUEO Crash Report (Android process exit record)")
+            appendLine("Tiveo Crash Report (Android process exit record)")
             appendLine("Package: ${context.packageName}")
             appendLine("Previous session version: $previousVersion")
             appendLine("Android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")

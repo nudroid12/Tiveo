@@ -121,7 +121,7 @@ class VueoSyncService private constructor(private val context: Context) {
     }
     suspend fun setSyncEnabledAndWait(value: Boolean) = withContext(Dispatchers.IO) {
         syncGate.withLock {
-            check(ready && connected()) { "Sign in to VUEO first." }
+            check(ready && connected()) { "Sign in to Tiveo first." }
             check(options.edit().putBoolean("sync_all",value).commit()) { "Unable to save sync preference" }
             if (value && repository==null) loadRepositories(uid(),force=true)
             initialCapture=true
@@ -286,7 +286,7 @@ class VueoSyncService private constructor(private val context: Context) {
         }
     }
     private suspend fun bearer(): String = tokenGate.withLock {
-        val current=session ?: throw IOException("Sign in to VUEO first.")
+        val current=session ?: throw IOException("Sign in to Tiveo first.")
         val expires=current.optLong("expires_at",current.optLong("created_at")+current.optLong("expires_in"))
         if (expires*1000L > System.currentTimeMillis()+60_000) return@withLock current.getString("access_token")
         val refreshed=SyncHttp.post("/auth/v1/token?grant_type=refresh_token",JSONObject().put("refresh_token",current.getString("refresh_token")))
@@ -296,11 +296,11 @@ class VueoSyncService private constructor(private val context: Context) {
         refreshed.getString("access_token")
     }
     private suspend fun rpc(name: String,body: JSONObject,user: String): JSONObject {
-        check(user.isNotBlank() && uid()==user) { "VUEO account changed." }
+        check(user.isNotBlank() && uid()==user) { "Tiveo account changed." }
         val token=bearer()
-        check(uid()==user) { "VUEO account changed." }
+        check(uid()==user) { "Tiveo account changed." }
         val result=SyncHttp.post("/rest/v1/rpc/$name",body,token,compact=name=="vueo_sync_exchange")
-        check(uid()==user) { "VUEO account changed." }
+        check(uid()==user) { "Tiveo account changed." }
         return result
     }
     suspend fun syncNow()=performSync(pull=true,captureAll=true)
@@ -493,7 +493,7 @@ class VueoSyncService private constructor(private val context: Context) {
             error is SyncHttpError && error.code==429 -> "Too many requests. Try again shortly. Local changes are saved."
             error is SyncHttpError && error.reason=="email_not_confirmed" -> "Confirm your email, then sign in."
             error is SyncHttpError && error.code in setOf(400,401) -> "Unable to sign in or refresh the session. Check your account details."
-            error is SyncHttpError && error.code in setOf(404,403) -> "Sync setup is missing or access is denied. Run the VUEO sync v2 SQL."
+            error is SyncHttpError && error.code in setOf(404,403) -> "Sync setup is missing or access is denied. Apply the sync v2 SQL."
             else -> "Sync unavailable. Local changes are saved; retry when online."
         }
     }

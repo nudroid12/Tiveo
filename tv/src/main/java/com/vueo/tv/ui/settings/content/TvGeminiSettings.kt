@@ -70,7 +70,7 @@ internal fun TvGeminiEnhancementSettings(
         add(TvSettingsEntry(
             id = "smartsubs-connect", title = "Test Connection",
             subtitle = status?.takeIf { it != "Connecting…" && it != "Connected" }
-                ?: "Check Gemini key/model through VUEO SmartSubs. Uses a small amount of Gemini quota.",
+                ?: "Check Gemini key/model through Tiveo SmartSubs. Uses a small amount of Gemini quota.",
             value = when {
                 testing -> "Connecting…"
                 status != null && status != "Connected" -> "Failed"
@@ -135,7 +135,7 @@ internal fun TvGeminiEnhancementSettings(
         ))
     }
     TvSettingsListScreen(
-        title = "Gemini", subtitle = "Your own API key for VUEO SmartSubs.",
+        title = "Gemini", subtitle = "Your own API key for Tiveo SmartSubs.",
         entries = entries, onNavigate = onNavigate, onProfile = onProfile, onBack = onBack,
         topLabel = "Enhancements",
         footer = "Account sync shares your API key. The session, SmartSubs ON/OFF and subtitle source choice stay on this TV. Select a Malay AI track in the player to translate eligible English subtitles.",

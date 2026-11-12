@@ -151,12 +151,12 @@ internal fun TvProfileSettings(
 }
 
 internal fun tvViewingClass(watchedTitles: Int): String = when {
-    watchedTitles < 10 -> "Baby VUEO"
+    watchedTitles < 10 -> "Baby Tiveo"
     watchedTitles < 30 -> "Explorer"
     watchedTitles < 75 -> "Binger"
     watchedTitles < 150 -> "Cinephile"
     watchedTitles < 300 -> "Screen Veteran"
-    else -> "VUEO Legend"
+    else -> "Tiveo Legend"
 }
 
 internal fun tvDnaClass(snapshot: UserDnaSnapshot): String {

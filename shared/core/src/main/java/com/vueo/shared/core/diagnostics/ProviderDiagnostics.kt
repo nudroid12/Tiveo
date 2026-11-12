@@ -362,7 +362,7 @@ object ProviderDiagnostics {
             val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
                 put(MediaStore.MediaColumns.MIME_TYPE, "application/zip")
-                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/VUEO")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Tiveo")
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
             val uri = requireNotNull(resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)) {
@@ -373,7 +373,7 @@ object ProviderDiagnostics {
                 values.clear()
                 values.put(MediaStore.MediaColumns.IS_PENDING, 0)
                 resolver.update(uri, values, null, null)
-                return SaveResult(displayName, "Downloads/VUEO")
+                return SaveResult(displayName, "Downloads/Tiveo")
             } catch (error: Throwable) {
                 runCatching { resolver.delete(uri, null, null) }
                 throw error
@@ -381,14 +381,14 @@ object ProviderDiagnostics {
         }
 
         val root = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS) ?: context.filesDir
-        val directory = File(root, "VUEO").apply { mkdirs() }
+        val directory = File(root, "Tiveo").apply { mkdirs() }
         val destination = File(directory, displayName)
         destination.outputStream().buffered().use { output -> writeZip(output, metadata) }
         return SaveResult(displayName, destination.parentFile?.absolutePath ?: directory.absolutePath)
     }
 
     private fun buildMetadata(context: Context): String = buildString {
-        appendLine("VUEO Provider Diagnostic Metadata")
+        appendLine("Tiveo Provider Diagnostic Metadata")
         appendLine("Package: ${context.packageName}")
         appendLine("Android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
         appendLine("Enabled: ${isCollecting()}")

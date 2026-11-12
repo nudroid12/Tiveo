@@ -155,7 +155,7 @@ private fun CollectionManagerBody(
                 OutlinedButton(enabled = ready && !busy, onClick = {
                     action {
                         val json = withContext(Dispatchers.Default) { CollectionJson.encode(collections) }
-                        clipboard.setPrimaryClip(ClipData.newPlainText("VUEO Collections", json))
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Tiveo Collections", json))
                         error = "Collections copied"
                     }
                 }) { Text("Copy JSON") }
@@ -192,7 +192,7 @@ private fun CollectionManagerBody(
     deleteId?.let { id -> AlertDialog(onDismissRequest = { deleteId = null }, title = { Text("Delete collection?") }, text = { Text("This removes the collection setup. Addons, Favorites and watch history are kept.") },
         confirmButton = { TextButton(onClick = { action { store.remove(id); deleteId = null } }, enabled = !busy) { Text("Delete") } },
         dismissButton = { TextButton(onClick = { deleteId = null }) { Text("Cancel") } }) }
-    importText?.let { text -> AlertDialog(onDismissRequest = { importText = null }, title = { Text("Import $importCount collections?") }, text = { Text("Collections with matching IDs will be updated. Other collections are kept. Sources must already be installed in VUEO.") },
+    importText?.let { text -> AlertDialog(onDismissRequest = { importText = null }, title = { Text("Import $importCount collections?") }, text = { Text("Collections with matching IDs will be updated. Other collections are kept. Sources must already be installed in Tiveo.") },
         confirmButton = { TextButton(onClick = { action { store.merge(text); importText = null } }, enabled = !busy) { Text("Import") } },
         dismissButton = { TextButton(onClick = { importText = null }) { Text("Cancel") } }) }
 }

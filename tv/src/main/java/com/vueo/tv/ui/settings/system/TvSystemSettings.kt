@@ -103,7 +103,7 @@ internal fun TvDataStorageSettings(
             "history" -> "Clear watch history?" to "Remove Watch History for the active profile?"
             "continue" -> "Clear Continue Watching?" to "Remove all Continue Watching entries for the active profile?"
             "cache" -> "Clear cache?" to "Rebuild Home and source-discovery caches on next use?"
-            else -> "Reset VUEO?" to "Clear profiles, configuration, Library and playback data on this TV?"
+            else -> "Reset Tiveo?" to "Clear profiles, configuration, Library and playback data on this TV?"
         }
         TvConfirmDialog(
             title = title,
@@ -132,7 +132,7 @@ internal fun TvDataStorageSettings(
                         "history" -> "Watch History cleared."
                         "continue" -> "Continue Watching cleared."
                         "cache" -> "Caches cleared."
-                        else -> "VUEO local data reset."
+                        else -> "Tiveo local data reset."
                     }
                     onDataChanged()
                     if (action == "reset") onResetComplete()
@@ -149,13 +149,13 @@ internal fun TvDataStorageSettings(
         add(TvSettingsEntry("export", "Create Backup", "Save profiles, Content Manager configuration, Settings, Library and playback progress.", "Export", onActivate = {
             exportLauncher.launch(backupFileName())
         }, section = "BACKUP & RESTORE"))
-        add(TvSettingsEntry("restore", "Restore Backup", "Choose a VUEO JSON backup. Current local data will be replaced.", "Restore", onActivate = {
+        add(TvSettingsEntry("restore", "Restore Backup", "Choose a Tiveo JSON backup. Current local data will be replaced.", "Restore", onActivate = {
             restoreLauncher.launch(arrayOf("application/json", "text/json", "text/plain"))
         }, section = "BACKUP & RESTORE"))
         add(TvSettingsEntry("clear-cache", "Catalog & Source Cache", "Clear catalog and source-discovery caches; configuration is preserved.", "Clear", onActivate = { confirmAction = "cache" }, section = "LOCAL DATA", icon = Icons.Default.SettingsInputComponent))
         add(TvSettingsEntry("clear-continue", "Continue Watching", "Remove unfinished playback entries for the active profile only.", "Clear", onActivate = { confirmAction = "continue" }, section = "LOCAL DATA"))
         add(TvSettingsEntry("clear-history", "Watch History", "Clear playback history for the active profile without changing Watchlist.", "Clear", onActivate = { confirmAction = "history" }, section = "LOCAL DATA"))
-        add(TvSettingsEntry("reset", "Reset VUEO Data", "Return local configuration and Library data to a fresh state without uninstalling the APK.", "Reset", onActivate = { confirmAction = "reset" }, section = "RESET"))
+        add(TvSettingsEntry("reset", "Reset Tiveo Data", "Return local configuration and Library data to a fresh state without uninstalling the APK.", "Reset", onActivate = { confirmAction = "reset" }, section = "RESET"))
         status?.let { add(TvSettingsEntry("status", "Status", it, enabled = false, section = "STATUS")) }
     }
 
@@ -186,7 +186,7 @@ internal fun TvAboutSettings(
         if (available != null) {
             if (TvUpdateManager.needsInstallPermission(context)) {
                 TvUpdateManager.installPermissionIntent(context)?.let { installPermissionLauncher.launch(it) }
-                status = "Allow installs for VUEO, then choose Update again."
+                status = "Allow installs for Tiveo, then choose Update again."
                 return
             }
             downloading = true
@@ -208,7 +208,7 @@ internal fun TvAboutSettings(
             checking = false
             status = when {
                 result.error != null -> result.error
-                result.release?.isNewerThanCurrent() == true -> "VUEO ${result.release.versionName} is ready to install."
+                result.release?.isNewerThanCurrent() == true -> "Tiveo ${result.release.versionName} is ready to install."
                 else -> "You're up to date."
             }
         }
@@ -221,7 +221,7 @@ internal fun TvAboutSettings(
         TvSettingsEntry(
             "update",
             "Check for Updates",
-            status ?: "Check and install the latest VUEO build.",
+            status ?: "Check and install the latest Tiveo build.",
             when {
                 checking -> "Checking…"
                 downloading -> "$progress%"

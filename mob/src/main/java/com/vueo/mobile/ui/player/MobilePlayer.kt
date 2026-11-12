@@ -4147,7 +4147,7 @@ internal fun PlayerScreen(
                 )
             },
             modifier = Modifier.align(Alignment.Center),
-            label = "VUEO player gesture feedback",
+            label = "Tiveo player gesture feedback",
         ) { message ->
             if (message != null) {
                 Surface(

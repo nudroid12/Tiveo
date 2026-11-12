@@ -171,7 +171,7 @@ class ProfileStore(
             existing.size <
                 MAX_PROFILES
         ) {
-            "VUEO supports up to $MAX_PROFILES local profiles."
+            "Tiveo supports up to $MAX_PROFILES local profiles."
         }
 
         val profile =

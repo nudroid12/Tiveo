@@ -300,7 +300,7 @@ internal fun PlaybackSettingsScreen(
         item {
             VueoSettingsValueCard(
                 title = "Player Orientation",
-                subtitle = "Choose how VUEO enters playback on mobile.",
+                subtitle = "Choose how Tiveo enters playback on mobile.",
                 value = orientation.label,
                 onClick = {
                     showOrientationDialog = true
@@ -374,7 +374,7 @@ internal fun PlaybackSettingsScreen(
         item {
             VueoInfoCard(
                 title = "Deterministic source selection",
-                text = "VUEO prioritises direct 1080p and 720p streams, accepts Auto or Unknown quality, and keeps lower known resolutions for manual selection.",
+                text = "Tiveo prioritises direct 1080p and 720p streams, accepts Auto or Unknown quality, and keeps lower known resolutions for manual selection.",
             )
         }
     }
@@ -634,7 +634,7 @@ internal fun SubtitleSettingsScreen(
         item {
             VueoSettingsValueCard(
                 title = "Preferred Language",
-                subtitle = "First language VUEO should prefer when subtitle tracks are available.",
+                subtitle = "First language Tiveo should prefer when subtitle tracks are available.",
                 value = preferred.label,
                 onClick = {
                     languageDialog = SubtitleLanguageTarget.PRIMARY
@@ -708,7 +708,7 @@ internal fun SubtitleSettingsScreen(
         item {
             VueoSettingsValueCard(
                 title = "Subtitle Size",
-                subtitle = "Saved display size preference for the VUEO player.",
+                subtitle = "Saved display size preference for the Tiveo player.",
                 value = size.label,
                 onClick = { showSizeDialog = true },
             )
@@ -752,7 +752,7 @@ internal fun SubtitleSettingsScreen(
         item {
             VueoInfoCard(
                 title = "Subtitle sources",
-                text = "OpenSubtitles and other subtitle addons remain in Content Manager. This page only controls how VUEO chooses and displays discovered subtitle tracks.",
+                text = "OpenSubtitles and other subtitle addons remain in Content Manager. This page only controls how Tiveo chooses and displays discovered subtitle tracks.",
             )
         }
     }
@@ -776,7 +776,7 @@ internal fun SourceSettingsScreen(
             VueoStatusCard(
                 title = "Smart Source Ranking",
                 value = "Active",
-                text = "VUEO ranks direct playability, resolution, HDR, codec information, provider health, response latency, and your preferred quality.",
+                text = "Tiveo ranks direct playability, resolution, HDR, codec information, provider health, response latency, and your preferred quality.",
             )
         }
 
@@ -819,7 +819,7 @@ internal fun AppearanceSettingsScreen(
 
     VueoSettingsPage(
         title = "Appearance",
-        subtitle = "Choose a dark VUEO palette, then tune the interactive accent.",
+        subtitle = "Choose a dark Tiveo palette, then tune the interactive accent.",
         onBack = onBack,
     ) {
         item {
@@ -863,9 +863,9 @@ internal fun AppearanceSettingsScreen(
                 title = "Selected Theme",
                 value = theme.label,
                 text = when (theme) {
-                    AppTheme.CHARCOAL -> "Neutral graphite charcoal. The default VUEO cinematic look."
+                    AppTheme.CHARCOAL -> "Neutral graphite charcoal. The default Tiveo cinematic look."
                     AppTheme.MIDNIGHT -> "Cool deep navy surfaces with a premium night-screen feel."
-                    AppTheme.DEEP_TEAL -> "Dark petrol teal surfaces with a distinctive VUEO character."
+                    AppTheme.DEEP_TEAL -> "Dark petrol teal surfaces with a distinctive Tiveo character."
                 },
             )
         }

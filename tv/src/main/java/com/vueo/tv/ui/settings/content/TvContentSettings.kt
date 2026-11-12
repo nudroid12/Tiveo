@@ -91,7 +91,7 @@ internal fun TvPersonalizationSettings(
 
     TvSettingsListScreen(
         "Personalization",
-        "Local, per-profile controls for how VUEO adapts to you. These settings stay on this device.",
+        "Local, per-profile controls for how Tiveo adapts to you. These settings stay on this device.",
         entries,
         onNavigate,
         onProfile,
@@ -250,7 +250,7 @@ internal fun TvAddonSettings(
     removeUrl?.let { url ->
         TvConfirmDialog(
             title = "Remove addon?",
-            message = "Remove ${addonByManifest[url.trim()]?.descriptor?.name ?: shortUrl(url)} from VUEO?",
+            message = "Remove ${addonByManifest[url.trim()]?.descriptor?.name ?: shortUrl(url)} from Tiveo?",
             confirmLabel = "Remove",
             themedRemove = true,
             onDismiss = { removeUrl = null },
@@ -413,7 +413,7 @@ internal fun TvAddonSettings(
                 },
             ))
             add(TvSettingsEntry(
-                id = "remove", title = "Remove", subtitle = "Remove this addon from VUEO.",
+                id = "remove", title = "Remove", subtitle = "Remove this addon from Tiveo.",
                 icon = Icons.Default.Extension, onActivate = { if (!working) { manageUrl = null; removeUrl = url } },
             ))
         }
@@ -975,7 +975,7 @@ internal fun TvEnhancementSettings(
         onNavigate = onNavigate,
         onProfile = onProfile,
         onBack = onBack,
-        footer = "VUEO core playback, Library and local Personalization continue to work without these services.",
+        footer = "Tiveo core playback, Library and local Personalization continue to work without these services.",
     )
 }
 

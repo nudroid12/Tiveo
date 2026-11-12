@@ -20,7 +20,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-internal class SyncHttpError(val code: Int, val reason: String) : IOException("VUEO Sync HTTP $code")
+internal class SyncHttpError(val code: Int, val reason: String) : IOException("Tiveo Sync HTTP $code")
 internal object SyncHttp {
     private val client = OkHttpClient.Builder().callTimeout(25,TimeUnit.SECONDS)
         .connectTimeout(8,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS)
@@ -28,7 +28,7 @@ internal object SyncHttp {
     suspend fun post(path: String, value: JSONObject, token: String? = null, compact: Boolean=false): JSONObject =
         suspendCancellableCoroutine { continuation ->
             if (VueoSyncConfig.URL.isBlank() || VueoSyncConfig.KEY.isBlank()) {
-                continuation.resumeWithException(IOException("Virio account sync is not configured."))
+                continuation.resumeWithException(IOException("Tiveo account sync is not configured."))
                 return@suspendCancellableCoroutine
             }
             val builder = Request.Builder().url(VueoSyncConfig.URL+path)

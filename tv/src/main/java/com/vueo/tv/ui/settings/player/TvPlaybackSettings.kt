@@ -140,7 +140,7 @@ internal fun TvSubtitleSettings(
     }
 
     val entries = listOf(
-        choiceEntry("primary", "Preferred Language", "First language VUEO should prefer when subtitle tracks are available.", primary.label, { primary = cycle(SubtitleLanguage.entries, primary, -1); store.setPreferredSubtitleLanguage(primary) }, { primary = cycle(SubtitleLanguage.entries, primary, 1); store.setPreferredSubtitleLanguage(primary) })
+        choiceEntry("primary", "Preferred Language", "First language Tiveo should prefer when subtitle tracks are available.", primary.label, { primary = cycle(SubtitleLanguage.entries, primary, -1); store.setPreferredSubtitleLanguage(primary) }, { primary = cycle(SubtitleLanguage.entries, primary, 1); store.setPreferredSubtitleLanguage(primary) })
             .copy(section = "LANGUAGE & BEHAVIOR", icon = Icons.Default.VideoLibrary),
         choiceEntry("secondary", "Secondary Language", "Fallback language when the preferred language is unavailable.", secondary.label, { secondary = cycle(SubtitleLanguage.entries, secondary, -1); store.setSecondarySubtitleLanguage(secondary) }, { secondary = cycle(SubtitleLanguage.entries, secondary, 1); store.setSecondarySubtitleLanguage(secondary) })
             .copy(section = "LANGUAGE & BEHAVIOR"),
@@ -163,7 +163,7 @@ internal fun TvSubtitleSettings(
                     backgroundColor = backgroundColor, backgroundOpacityPercent = backgroundOpacity,
                 ))
             }),
-        choiceEntry("size", "Subtitle Size", "Saved display size preference for the VUEO player.", size.label, { size = cycle(SubtitleSize.entries, size, -1); store.setSubtitleSize(size) }, { size = cycle(SubtitleSize.entries, size, 1); store.setSubtitleSize(size) })
+        choiceEntry("size", "Subtitle Size", "Saved display size preference for the Tiveo player.", size.label, { size = cycle(SubtitleSize.entries, size, -1); store.setSubtitleSize(size) }, { size = cycle(SubtitleSize.entries, size, 1); store.setSubtitleSize(size) })
             .copy(section = "DISPLAY"),
         toggleEntry("bold", "Bold Subtitles", "Use heavier subtitle text.", bold) { bold = it; store.setSubtitleBold(it) }
             .copy(section = "DISPLAY"),
@@ -265,7 +265,7 @@ internal fun TvAppearanceSettings(
             }.copy(section = "NAVIGATION")
         } else null,
     )
-    TvSettingsListScreen("Appearance", "Choose a dark VUEO palette and tune the interactive accent.", entries, onNavigate, onProfile, onBack)
+    TvSettingsListScreen("Appearance", "Choose a dark Tiveo palette and tune the interactive accent.", entries, onNavigate, onProfile, onBack)
 }
 
 @Composable

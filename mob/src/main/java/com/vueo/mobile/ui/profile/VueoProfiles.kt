@@ -208,7 +208,7 @@ internal fun WhosWatchingScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(VueoPalette.Background),
-        label = "VUEO profile manage transition",
+        label = "Tiveo profile manage transition",
     ) { managing ->
         if (managing) {
             ProfileSettingsScreen(
@@ -380,7 +380,7 @@ internal fun ProfileSettingsScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(VueoPalette.Background),
-        label = "VUEO profile editor transition",
+        label = "Tiveo profile editor transition",
     ) { editorState ->
         if (editorState != null) {
             ProfileEditorScreen(
@@ -526,7 +526,7 @@ internal fun ProfileSettingsScreen(
                                     fontSize = 14.sp,
                                 )
                                 Text(
-                                    text = "Show profile picker when VUEO launches",
+                                    text = "Show profile picker when Tiveo launches",
                                     color = VueoPalette.Muted,
                                     fontSize = 10.sp,
                                 )

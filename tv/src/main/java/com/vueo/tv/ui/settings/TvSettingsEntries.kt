@@ -93,5 +93,5 @@ internal fun shortUrl(value: String): String = runCatching {
 
 internal fun backupFileName(): String {
     val stamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
-    return "VUEO-TV-backup-$stamp.json"
+    return "Tiveo-TV-backup-$stamp.json"
 }

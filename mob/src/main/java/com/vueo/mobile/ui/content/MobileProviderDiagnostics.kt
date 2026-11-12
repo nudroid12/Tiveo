@@ -790,7 +790,7 @@ internal fun RuntimeDiagnosticsDialog(
                                     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                                     clipboard?.setPrimaryClip(
                                         ClipData.newPlainText(
-                                            if (copyRaw) "VUEO raw diagnostic" else "VUEO diagnostic summary",
+                                            if (copyRaw) "Tiveo raw diagnostic" else "Tiveo diagnostic summary",
                                             fullText,
                                         )
                                     )
@@ -1139,7 +1139,7 @@ internal fun PerformanceDiagnosticsDialog(
                                     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                                     clipboard?.setPrimaryClip(
                                         ClipData.newPlainText(
-                                            "VUEO ${diagnostics.kind} ${if (copyRaw) "raw" else "summary"} ${copyTab.label}",
+                                            "Tiveo ${diagnostics.kind} ${if (copyRaw) "raw" else "summary"} ${copyTab.label}",
                                             fullText,
                                         )
                                     )
@@ -1522,7 +1522,7 @@ internal fun ProviderHealthRow(
                     onCopyFullLog = {
                         copyProviderDiagnostic(
                             context = context,
-                            label = "VUEO provider diagnostic log",
+                            label = "Tiveo provider diagnostic log",
                             text = providerDiagnosticFullLog(
                                 repository = repository,
                                 provider = provider,
@@ -1862,7 +1862,7 @@ internal fun providerDiagnosticSummary(
     currentlyEnabled: Boolean,
     providerCodeReady: Boolean,
 ): String = buildString {
-    appendLine("VUEO Provider Debug Log")
+    appendLine("Tiveo Provider Debug Log")
     appendLine("Provider: ${provider.name} v${provider.version}")
     appendLine("Status: ${if (currentlyEnabled) ProviderDiagnosticSummary.statusLabel(health) else "Disabled (last ${ProviderDiagnosticSummary.statusLabel(health)})"}")
     providerRequestLabelOrNull(health)?.let { appendLine("Request: $it") }
@@ -1990,7 +1990,7 @@ internal fun ScreenHeader(
             verticalArrangement = Arrangement.spacedBy(1.dp),
         ) {
             Text(
-                text = "VUEO",
+                text = "Tiveo",
                 color = VueoPalette.Muted,
                 fontSize = 9.5.sp,
                 fontWeight = FontWeight.Bold,

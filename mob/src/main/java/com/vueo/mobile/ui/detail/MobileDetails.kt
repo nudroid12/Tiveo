@@ -1776,7 +1776,7 @@ internal fun MediaDetailsScreen(
             }
         },
         modifier = Modifier.fillMaxSize(),
-        label = "VUEO detail source player transition",
+        label = "Tiveo detail source player transition",
     ) { surface ->
         when (surface) {
             DetailSurface.PLAYER -> {
