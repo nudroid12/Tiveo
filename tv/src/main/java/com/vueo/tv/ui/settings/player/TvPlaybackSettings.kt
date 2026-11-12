@@ -4,7 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -28,7 +27,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalContext
 import com.vueo.shared.core.dna.UserDnaPreferences
 import com.vueo.shared.core.dna.UserDnaSnapshot
 import com.vueo.shared.core.extensions.CatalogDiscoveryCache
@@ -52,8 +50,6 @@ import com.vueo.shared.core.storage.VueoBackupManager
 import com.vueo.tv.BuildConfig
 import com.vueo.tv.core.TvRuntime
 import com.vueo.tv.ui.TvDesign
-import com.vueo.tv.ui.TvSidebarPreferences
-import com.vueo.tv.ui.TvSidebarStyle
 import com.vueo.tv.update.TvUpdateManager
 import com.vueo.tv.update.TvUpdateRelease
 import kotlinx.coroutines.launch
@@ -228,14 +224,11 @@ internal fun TvAppearanceSettings(
     onProfile: () -> Unit,
     onBack: () -> Unit,
 ) {
-    val context = LocalContext.current
     val store = runtime.settingsStore
     var theme by remember { mutableStateOf(store.appTheme()) }
     var accent by remember { mutableStateOf(store.appAccent()) }
-    var sidebarStyle by remember { mutableStateOf(TvSidebarPreferences.style(context)) }
-    var hideSidebar by remember { mutableStateOf(TvSidebarPreferences.hideSidebar(context)) }
 
-    val entries = listOfNotNull(
+    val entries = listOf(
         choiceEntry("theme", "Theme", "Choose the dark cinematic base palette.", theme.label, {
             theme = cycle(AppTheme.entries, theme, -1); store.setAppTheme(theme); TvDesign.applyTheme(theme)
         }, {
@@ -246,24 +239,6 @@ internal fun TvAppearanceSettings(
         }, {
             accent = cycle(AppAccent.entries, accent, 1); store.setAppAccent(accent); TvDesign.applyAccent(accent)
         }).copy(section = "LOOK & FEEL"),
-        choiceEntry("sidebar-style", "Navigation mode", "Choose between Sidebar and Topbar navigation.", sidebarStyle.label, {
-            sidebarStyle = cycle(TvSidebarStyle.entries, sidebarStyle, -1)
-            TvSidebarPreferences.setStyle(context, sidebarStyle)
-        }, {
-            sidebarStyle = cycle(TvSidebarStyle.entries, sidebarStyle, 1)
-            TvSidebarPreferences.setStyle(context, sidebarStyle)
-        }).copy(section = "NAVIGATION"),
-        if (sidebarStyle == TvSidebarStyle.CLASSIC) {
-            toggleEntry(
-                "hide-sidebar",
-                "Hide Sidebar",
-                "Use full-width content when closed. Press Back or Left to open Sidebar as an overlay.",
-                hideSidebar,
-            ) {
-                hideSidebar = it
-                TvSidebarPreferences.setHideSidebar(context, it)
-            }.copy(section = "NAVIGATION")
-        } else null,
     )
     TvSettingsListScreen("Appearance", "Choose a dark Tiveo palette and tune the interactive accent.", entries, onNavigate, onProfile, onBack)
 }
@@ -273,8 +248,8 @@ internal fun SubtitleFontPreview(style: TvPlayerSubtitleStyleState) {
     androidx.compose.ui.viewinterop.AndroidView(
         modifier = Modifier.fillMaxWidth().height(64.dp)
             .clip(RoundedCornerShape(9.dp))
-            .background(Color(0xFF101318))
-            .border(1.dp, Color.White.copy(alpha = .10f), RoundedCornerShape(9.dp)),
+            .background(TvDesign.Surface)
+            .border(1.dp, TvDesign.White.copy(alpha = .10f), RoundedCornerShape(9.dp)),
         factory = { context -> androidx.media3.ui.SubtitleView(context).apply {
             isFocusable = false
             importantForAccessibility = android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO

@@ -41,6 +41,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -51,6 +52,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -62,6 +64,8 @@ import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -85,15 +89,6 @@ import com.vueo.tv.home.TiveoTopBarHeight
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-
-private object TvSettingsContrast {
-    val Pill = Color(0xFF303030)
-    val SelectedPill = Color(0xFF404040)
-    val FocusedPill = Color(0xFF555555)
-    val Card = Color(0xFF303030)
-    val CardContainer = Color(0xFF202020)
-    val DisabledCard = Color(0xFF242424)
-}
 
 internal data class TvSettingsEntry(
     val id: String,
@@ -138,7 +133,7 @@ internal data class TvSettingsMetric(
 internal data class TvSettingsEmbeddedHost(
     val panelKey: String,
     val requesterFor: (String) -> FocusRequester,
-    val onFocusableRowsChanged: (List<String>) -> Unit,
+    val onFocusableRowsChanged: (List<String>, String?) -> Unit,
     val restorePanelFocus: () -> Boolean,
     val requestDeferredPanelRestore: () -> Unit,
     val onLeftToCategory: () -> Unit,
@@ -158,6 +153,7 @@ internal fun TvSettingsMasterDetailShell(
     panelHasBack: Boolean,
     bottomNotice: String?,
     onCategorySelected: (String) -> Unit,
+    onCategoryOpened: (String) -> Unit,
     onPanelBack: () -> Unit,
     topBar: TiveoTopBarState,
     onBack: () -> Unit,
@@ -195,11 +191,12 @@ internal fun TvSettingsMasterDetailShell(
     var categorySelectJob by remember { mutableStateOf<Job?>(null) }
     var panelRestoreJob by remember { mutableStateOf<Job?>(null) }
     val shellScope = rememberCoroutineScope()
+    val currentPanelKey by rememberUpdatedState(panelKey)
 
     fun requesterForPanelRow(key: String, rowId: String): FocusRequester =
         panelRequesters.getOrPut(key) { mutableMapOf() }.getOrPut(rowId) { FocusRequester() }
 
-    fun updatePanelFocusableRows(key: String, rowIds: List<String>) {
+    fun updatePanelFocusableRows(key: String, rowIds: List<String>, preferredFocusId: String?) {
         val previousRows = panelFocusableRowIds[key].orEmpty()
         panelFocusableRowIds[key] = rowIds
 
@@ -211,7 +208,7 @@ internal fun TvSettingsMasterDetailShell(
         panelFirstRowIds[key] = rowIds.first()
         val previousFocusedId = panelLastFocusedIds[key]
         if (previousFocusedId == null) {
-            panelLastFocusedIds[key] = rowIds.first()
+            panelLastFocusedIds[key] = preferredFocusId?.takeIf { it in rowIds } ?: rowIds.first()
             return
         }
 
@@ -222,7 +219,7 @@ internal fun TvSettingsMasterDetailShell(
             } else {
                 0
             }
-            panelLastFocusedIds[key] = rowIds[fallbackIndex]
+            panelLastFocusedIds[key] = preferredFocusId?.takeIf { it in rowIds } ?: rowIds[fallbackIndex]
         }
     }
 
@@ -241,6 +238,7 @@ internal fun TvSettingsMasterDetailShell(
     }
 
     fun focusSelectedCategory(): Boolean {
+        panelRestoreJob?.cancel()
         lastPane = "category"
         val requester = categoryRequesters.getValue(selectedCategoryId)
         if (runCatching { requester.requestFocus() }.getOrDefault(false)) return true
@@ -276,7 +274,7 @@ internal fun TvSettingsMasterDetailShell(
             // focus back after the user intentionally moved to categories/sidebar.
             for (waitMs in listOf(24L, 48L, 90L, 140L)) {
                 delay(waitMs)
-                if (!active || topBar.hasFocus || lastPane != "panel") return@launch
+                if (!active || topBar.hasFocus || lastPane != "panel" || panelKey != currentPanelKey) return@launch
                 if (focusPanel()) return@launch
             }
             // Empty panels still need a deterministic escape target. Only fall back
@@ -356,9 +354,7 @@ internal fun TvSettingsMasterDetailShell(
                     top = TiveoTopBarHeight + 10.dp,
                     bottom = 28.dp,
                 )
-                .background(TvDesign.Surface.copy(alpha = .28f), RoundedCornerShape(12.dp))
-                .border(1.dp, TvDesign.White.copy(alpha = .12f), RoundedCornerShape(12.dp))
-                .padding(16.dp),
+                .padding(horizontal = 4.dp, vertical = 12.dp),
         ) {
             Column(
                 modifier = Modifier
@@ -366,17 +362,16 @@ internal fun TvSettingsMasterDetailShell(
                     .fillMaxHeight(),
             ) {
                 Text(
-                    text = "SETTINGS",
-                    color = TvDesign.Dim,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.25.sp,
-                    modifier = Modifier.padding(start = 10.dp, bottom = 10.dp),
+                    text = "Settings",
+                    color = TvDesign.White,
+                    fontSize = 23.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(start = 12.dp, bottom = 16.dp),
                 )
 
                 LazyColumn(
                     state = categoryListState,
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     categories.forEachIndexed { index, category ->
@@ -384,7 +379,6 @@ internal fun TvSettingsMasterDetailShell(
                             TvSettingsCategoryRow(
                                 category = category,
                                 selected = category.id == selectedCategoryId,
-                                grouped = false,
                                 requester = categoryRequesters.getValue(category.id),
                                 onFocused = categoryFocused@{
                                     if (!active || topBar.hasFocus) return@categoryFocused
@@ -415,8 +409,9 @@ internal fun TvSettingsMasterDetailShell(
                                 onLeft = ::focusGlobalNav,
                                 onRight = {
                                     categorySelectJob?.cancel()
-                                    onCategorySelected(category.id)
-                                    focusPanel()
+                                    panelRestoreJob?.cancel()
+                                    onCategoryOpened(category.id)
+                                    true
                                 },
                                 onUp = {
                                     if (index == 0) {
@@ -440,13 +435,20 @@ internal fun TvSettingsMasterDetailShell(
                 }
             }
 
-            Spacer(Modifier.width(26.dp))
+            Spacer(Modifier.width(18.dp))
+            Box(
+                Modifier.fillMaxHeight().width(1.dp)
+                    .background(TvDesign.White.copy(alpha = .10f)),
+            )
+            Spacer(Modifier.width(24.dp))
 
             CompositionLocalProvider(
                 LocalTvSettingsEmbeddedHost provides TvSettingsEmbeddedHost(
                     panelKey = panelKey,
                     requesterFor = { rowId -> requesterForPanelRow(panelKey, rowId) },
-                    onFocusableRowsChanged = { rowIds -> updatePanelFocusableRows(panelKey, rowIds) },
+                    onFocusableRowsChanged = { rowIds, preferredFocusId ->
+                        updatePanelFocusableRows(panelKey, rowIds, preferredFocusId)
+                    },
                     restorePanelFocus = {
                         if (lastPane == "panel") focusPanel() else false
                     },
@@ -488,13 +490,13 @@ internal fun TvSettingsMasterDetailShell(
         bottomNotice?.let { notice ->
             Text(
                 text = notice,
-                color = Color.White,
+                color = TvDesign.White,
                 fontSize = 16.sp,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(horizontal = 24.dp)
                     .padding(bottom = 34.dp)
-                    .background(Color(0xF0202020), RoundedCornerShape(percent = 50))
+                    .background(TvDesign.SurfaceRaised.copy(alpha = .96f), RoundedCornerShape(percent = 50))
                     .padding(horizontal = 24.dp, vertical = 9.dp),
             )
         }
@@ -505,7 +507,6 @@ internal fun TvSettingsMasterDetailShell(
 private fun TvSettingsCategoryRow(
     category: TvSettingsNavItem,
     selected: Boolean,
-    grouped: Boolean,
     requester: FocusRequester,
     onFocused: () -> Unit,
     onLeft: () -> Unit,
@@ -517,7 +518,7 @@ private fun TvSettingsCategoryRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(if (grouped) 46.dp else 50.dp)
+            .height(44.dp)
             .focusRequester(requester)
             .onFocusChanged { state ->
                 focused = state.isFocused
@@ -542,20 +543,16 @@ private fun TvSettingsCategoryRow(
             }
             .background(
                 when {
-                    focused -> TvSettingsContrast.FocusedPill
-                    selected -> TvSettingsContrast.SelectedPill
-                    else -> TvSettingsContrast.Pill
+                    focused -> TvDesign.SurfaceRaised
+                    selected -> TvDesign.SurfaceRaised.copy(alpha = .55f)
+                    else -> Color.Transparent
                 },
-                RoundedCornerShape(percent = 50),
+                TvDesign.CardShape,
             )
             .border(
-                if (focused) 2.dp else 1.dp,
-                when {
-                    focused -> TvDesign.White.copy(alpha = .94f)
-                    selected -> TvDesign.White.copy(alpha = .28f)
-                    else -> TvDesign.White.copy(alpha = .10f)
-                },
-                RoundedCornerShape(percent = 50),
+                1.dp,
+                if (focused) TvDesign.Focus.copy(alpha = .75f) else Color.Transparent,
+                TvDesign.CardShape,
             )
             .focusable()
             .padding(horizontal = 15.dp),
@@ -563,7 +560,7 @@ private fun TvSettingsCategoryRow(
     ) {
         Text(
             text = category.title,
-            color = TvDesign.White.copy(alpha = if (focused || selected) 1f else .92f),
+            color = if (focused || selected) TvDesign.White else TvDesign.Muted,
             fontSize = 16.sp,
             fontWeight = if (focused || selected) FontWeight.SemiBold else FontWeight.Medium,
             modifier = Modifier.weight(1f),
@@ -573,7 +570,7 @@ private fun TvSettingsCategoryRow(
         Spacer(Modifier.width(12.dp))
         Text(
             text = "›",
-            color = TvDesign.White.copy(alpha = if (focused) 1f else .72f),
+            color = if (focused || selected) TvDesign.Muted else Color.Transparent,
             fontSize = 20.sp,
         )
     }
@@ -595,7 +592,7 @@ internal fun TvSettingsProfilePanel(
     val profileRequester = host.requesterFor("profile-card")
     val switchRequester = host.requesterFor("switch-profiles")
     LaunchedEffect(host.panelKey) {
-        host.onFocusableRowsChanged(listOf("profile-card", "switch-profiles"))
+        host.onFocusableRowsChanged(listOf("profile-card", "switch-profiles"), null)
         delay(24)
         host.restorePanelFocus()
     }
@@ -619,10 +616,7 @@ internal fun TvSettingsProfilePanel(
 
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .background(TvSettingsContrast.CardContainer, RoundedCornerShape(20.dp))
-                .border(1.dp, TvDesign.White.copy(alpha = .11f), RoundedCornerShape(20.dp))
-                .padding(16.dp),
+                .fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(13.dp),
         ) {
             Row(
@@ -654,7 +648,7 @@ internal fun TvSettingsProfilePanel(
                         }
                     }
                     .clip(RoundedCornerShape(15.dp))
-                    .background(if (profileFocused) TvSettingsContrast.FocusedPill else TvSettingsContrast.Card)
+                    .background(if (profileFocused) TvDesign.SurfaceRaised else TvDesign.Surface)
                     .border(
                         if (profileFocused) 1.5.dp else 0.dp,
                         if (profileFocused) TvDesign.White.copy(alpha = .88f) else TvDesign.White.copy(alpha = 0f),
@@ -762,7 +756,7 @@ internal fun TvSettingsProfilePanel(
                         }
                     }
                     .clip(RoundedCornerShape(14.dp))
-                    .background(if (switchFocused) TvDesign.White else TvSettingsContrast.Card)
+                    .background(if (switchFocused) TvDesign.White else TvDesign.Surface)
                     .border(
                         if (switchFocused) 1.5.dp else 1.dp,
                         if (switchFocused) TvDesign.White else TvDesign.White.copy(alpha = .06f),
@@ -800,7 +794,7 @@ private fun TvProfileStat(
     Column(
         modifier = modifier
             .height(86.dp)
-            .background(TvSettingsContrast.Card, RoundedCornerShape(13.dp))
+            .background(TvDesign.Surface, RoundedCornerShape(13.dp))
             .padding(horizontal = 10.dp, vertical = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
@@ -828,7 +822,7 @@ private fun TvSettingsMetricsRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(TvSettingsContrast.Card, RoundedCornerShape(16.dp))
+            .background(TvDesign.Surface, RoundedCornerShape(16.dp))
             .border(1.dp, TvDesign.White.copy(alpha = .08f), RoundedCornerShape(16.dp))
             .padding(horizontal = 12.dp, vertical = if (inlineLabels) 12.dp else 11.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -895,6 +889,7 @@ internal fun TvSettingsListScreen(
             topLabel = topLabel,
             footer = footer,
             metrics = metrics,
+            preferredFocusId = preferredFocusId,
             addonLayout = addonLayout,
             contentManager = contentManager,
         )
@@ -1000,7 +995,7 @@ internal fun TvSettingsListScreen(
                         targetId?.let { rowRequesters[it] } ?: FocusRequester.Default
                     }
                     .focusGroup(),
-                verticalArrangement = Arrangement.spacedBy(if (entries.any { it.providerStatus != null }) 0.dp else 8.dp),
+                verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 if (accountHeader) item(key = "account-header") {
                     TvAccountSummaryPanel(entries, { rowRequesters.getValue(it) },
@@ -1078,6 +1073,7 @@ private fun TvSettingsEmbeddedPanel(
     topLabel: String?,
     footer: String?,
     metrics: List<TvSettingsMetric>,
+    preferredFocusId: String?,
     addonLayout: Boolean = false,
     contentManager: Boolean = false,
 ) {
@@ -1087,8 +1083,8 @@ private fun TvSettingsEmbeddedPanel(
     val firstFocusable = entries.firstOrNull { it.enabled }
     val lastFocusable = entries.lastOrNull { it.enabled }
 
-    LaunchedEffect(host.panelKey, focusableIds) {
-        host.onFocusableRowsChanged(focusableIds)
+    LaunchedEffect(host.panelKey, focusableIds, preferredFocusId) {
+        host.onFocusableRowsChanged(focusableIds, preferredFocusId)
         if (focusableIds.isNotEmpty()) {
             delay(24)
             host.restorePanelFocus()
@@ -1133,7 +1129,7 @@ private fun TvSettingsEmbeddedPanel(
                 .fillMaxWidth()
                 .weight(1f),
             contentPadding = if (addonLayout) PaddingValues(0.dp) else PaddingValues(start = 3.dp, end = 3.dp, top = 8.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(if (entries.any { it.providerStatus != null }) 0.dp else 8.dp),
+            verticalArrangement = Arrangement.spacedBy(0.dp),
         ) {
             if (accountHeader) item(key = "account-header") {
                 TvAccountSummaryPanel(entries, host)
@@ -1195,12 +1191,10 @@ internal fun TvSettingsRow(
     requester: FocusRequester,
     first: Boolean,
     last: Boolean,
-    grouped: Boolean = false,
     compact: Boolean = false,
     modifier: Modifier = Modifier,
     onLeftToSidebar: () -> Unit,
     onFocused: () -> Unit,
-    restoreContentStyle: Boolean = false,
 ) {
     if (entry.catalogControls) {
         TvCatalogControlsRow(entry, requester, first, last, modifier, onLeftToSidebar, onFocused)
@@ -1212,18 +1206,13 @@ internal fun TvSettingsRow(
     }
     var focused by remember(entry.id) { mutableStateOf(false) }
     val canAdjust = entry.onPrevious != null || entry.onNext != null
-    val shape = RoundedCornerShape(
-        when {
-            entry.accented -> 15.dp
-            grouped -> 14.dp
-            else -> 11.dp
-        },
-    )
+    val shape = TvDesign.CardShape
+    val divider = TvDesign.White.copy(alpha = .09f)
 
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .heightIn(min = if (restoreContentStyle) { if (compact) 56.dp else 70.dp } else { if (compact) 52.dp else 60.dp })
+            .heightIn(min = if (compact) 48.dp else 58.dp)
             .focusRequester(requester)
             .onFocusChanged {
                 focused = it.isFocused
@@ -1272,26 +1261,22 @@ internal fun TvSettingsRow(
                     else -> false
                 }
             }
-            .background(
-                color = when {
-                    !entry.enabled -> TvSettingsContrast.DisabledCard
-                    focused -> TvSettingsContrast.FocusedPill
-                    else -> TvSettingsContrast.Card
-                },
-                shape = shape,
-            )
+            .background(if (focused) TvDesign.SurfaceRaised else Color.Transparent, shape)
             .border(
-                width = if (focused) 1.5.dp else if (restoreContentStyle && !grouped) 1.dp else 0.dp,
-                color = when {
-                    !entry.enabled -> TvDesign.White.copy(alpha = .025f)
-                    focused && entry.accented -> TvDesign.Accent.copy(alpha = .90f)
-                    focused -> TvDesign.White.copy(alpha = .88f)
-                    grouped -> TvDesign.White.copy(alpha = 0f)
-                    entry.accented -> TvDesign.Accent.copy(alpha = .12f)
-                    else -> TvDesign.White.copy(alpha = .045f)
+                1.dp,
+                when {
+                    focused && entry.accented -> TvDesign.Accent
+                    focused -> TvDesign.Focus.copy(alpha = .75f)
+                    else -> Color.Transparent
                 },
-                shape = shape,
+                shape,
             )
+            .drawBehind {
+                if (!focused) {
+                    val y = size.height - .5.dp.toPx()
+                    drawLine(divider, Offset(12.dp.toPx(), y), Offset(size.width - 12.dp.toPx(), y), 1.dp.toPx())
+                }
+            }
             .focusable(enabled = entry.enabled)
             .padding(horizontal = 16.dp, vertical = if (compact) 7.dp else 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1361,7 +1346,7 @@ internal fun TvSettingsRow(
             Text(
                 text = entry.subtitle,
                 color = if (entry.enabled) TvDesign.Muted else TvDesign.Dim.copy(alpha = .65f),
-                fontSize = if (restoreContentStyle) 11.sp else 12.sp,
+                fontSize = 12.sp,
                 lineHeight = 15.sp,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
@@ -1379,7 +1364,7 @@ internal fun TvSettingsRow(
                         Text(
                             text = choice,
                             color = if (selected) TvDesign.White else TvDesign.Muted,
-                            fontSize = if (restoreContentStyle) 11.sp else 12.sp,
+                            fontSize = 12.sp,
                             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -1521,7 +1506,7 @@ internal fun TvTextEntryDialog(
         Dialog(onDismissRequest = { if (!busy) dismissAndRestore() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             Column(
                 modifier = Modifier.width(440.dp)
-                    .background(TvSettingsContrast.Card, RoundedCornerShape(18.dp))
+                    .background(TvDesign.Surface, RoundedCornerShape(18.dp))
                     .border(1.dp, TvDesign.White.copy(alpha = .22f), RoundedCornerShape(18.dp))
                     .padding(24.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -1536,8 +1521,8 @@ internal fun TvTextEntryDialog(
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = TvDesign.White, unfocusedBorderColor = TvDesign.White.copy(alpha = .28f),
-                        cursorColor = TvDesign.White, focusedContainerColor = Color(0xFF202020),
-                        unfocusedContainerColor = Color(0xFF202020),
+                        cursorColor = TvDesign.White, focusedContainerColor = TvDesign.SurfaceRaised,
+                        unfocusedContainerColor = TvDesign.SurfaceRaised,
                     ),
                 )
                 message?.takeIf { it.isNotBlank() }?.let { Text(it, color = TvDesign.Muted, fontSize = 12.sp) }
@@ -1598,10 +1583,10 @@ private fun TvInstallDialogButton(label: String, enabled: Boolean, modifier: Mod
     TextButton(
         enabled = enabled, onClick = onClick,
         modifier = modifier.onFocusChanged { focused = it.isFocused }
-            .background(if (focused) TvDesign.White else TvSettingsContrast.Card, shape)
+            .background(if (focused) TvDesign.White else TvDesign.Surface, shape)
             .border(1.dp, TvDesign.White.copy(alpha = if (focused) 1f else .25f), shape),
         colors = ButtonDefaults.textButtonColors(
-            contentColor = if (destructive) Color(0xFFFF5252) else if (focused) Color.Black else TvDesign.White,
+            contentColor = if (destructive) MaterialTheme.colorScheme.error else if (focused) TvDesign.Black else TvDesign.White,
             disabledContentColor = TvDesign.Dim.copy(alpha = .5f),
         ),
         contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
@@ -1620,12 +1605,12 @@ internal fun TvDeveloperPinChoice(
     TvModalDialog(onDismissRequest = onCancel, initialFocus = skipRequester) {
         val finish = com.vueo.tv.ui.motion.LocalTvMotionFinish.current
         Box(
-            modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = .65f)),
+            modifier = Modifier.fillMaxSize().background(TvDesign.Black.copy(alpha = .65f)),
             contentAlignment = Alignment.Center,
         ) {
             Column(
                 modifier = Modifier.width(440.dp)
-                    .background(TvSettingsContrast.Card, RoundedCornerShape(18.dp))
+                    .background(TvDesign.Surface, RoundedCornerShape(18.dp))
                     .padding(24.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
@@ -1685,7 +1670,7 @@ internal fun TvConfirmDialog(
             val finish = com.vueo.tv.ui.motion.LocalTvMotionFinish.current
             Column(
                 modifier = Modifier.width(440.dp)
-                    .background(TvSettingsContrast.Card, RoundedCornerShape(18.dp))
+                    .background(TvDesign.Surface, RoundedCornerShape(18.dp))
                     .border(1.dp, TvDesign.White.copy(alpha = .22f), RoundedCornerShape(18.dp))
                     .padding(24.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -1777,7 +1762,6 @@ private fun TvAddonControls(
                 if (entry.id == "add" || entry.id == "add-repo") {
                     TvSettingsRow(
                         entry = entry, requester = requesterFor(entry.id), first = false, last = false,
-                        restoreContentStyle = true,
                         modifier = Modifier.weight(1f).then(actionModifier),
                         onLeftToSidebar = onLeftToSidebar, onFocused = { onFocused(entry.id) },
                     )
@@ -1797,7 +1781,7 @@ private fun TvAddonControls(
                                     true
                                 } else false
                             }
-                            .background(if (focused) TvSettingsContrast.FocusedPill else TvSettingsContrast.Card, shape)
+                            .background(if (focused) TvDesign.SurfaceRaised else TvDesign.Surface, shape)
                             .border(1.dp, if (focused) TvDesign.White else TvDesign.White.copy(alpha = .12f), shape)
                             .focusable(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1827,7 +1811,6 @@ private fun TvAddonControls(
         systemCards.forEachIndexed { index, entry ->
             TvSettingsRow(
                 entry = entry, requester = requesterFor(entry.id), first = false, last = false,
-                restoreContentStyle = true,
                 modifier = Modifier.focusProperties {
                     up = requesterFor(if (index > 0) systemCards[index - 1].id else actions.first().id)
                     down = if (index < systemCards.lastIndex) requesterFor(systemCards[index + 1].id)
@@ -1915,7 +1898,7 @@ private fun TvSubtitleFontSettingsCard(
                     else -> false
                 }
             }
-            .background(TvSettingsContrast.Card, shape)
+            .background(TvDesign.Surface, shape)
             .border(1.dp, TvDesign.White.copy(alpha = if (focused) .28f else .045f), shape)
             .focusable(enabled = entry.enabled)
             .padding(16.dp),

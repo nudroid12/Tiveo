@@ -294,6 +294,9 @@ internal fun TvSettingsScreen(
                 if (page != destination.page) page = destination.page
             }
         },
+        onCategoryOpened = { id ->
+            visibleRoots.firstOrNull { it.id == id }?.let { openPanel(it.page) }
+        },
         onPanelBack = ::backPanel,
         topBar = topBar,
         onBack = onBack,

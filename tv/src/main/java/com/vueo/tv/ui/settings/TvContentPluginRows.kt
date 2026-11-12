@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,11 +34,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-private val PluginSurface = Color(0xFF303030)
-private val PluginFocus = Color(0xFF555555)
-private val PluginMuted = Color.White.copy(alpha = .6f)
-private val PluginFailure = Color(0xFFFFB4AB)
-
 internal fun TvSettingsEntry.isRepositoryAction(): Boolean =
     id == "refresh-repository" || id == "remove-repository"
 
@@ -48,10 +44,10 @@ internal fun TvContentToggle(checked: Boolean, compact: Boolean = false) {
         checked = checked, onCheckedChange = null,
         modifier = if (compact) Modifier.graphicsLayer { scaleX = .82f; scaleY = .82f } else Modifier,
         colors = SwitchDefaults.colors(
-            checkedThumbColor = Color(0xFF202020), checkedTrackColor = Color.White,
-            checkedBorderColor = Color.White,
-            uncheckedThumbColor = Color.White.copy(alpha = .65f),
-            uncheckedTrackColor = Color(0xFF454545), uncheckedBorderColor = Color.White.copy(alpha = .25f),
+            checkedThumbColor = TvDesign.Black, checkedTrackColor = TvDesign.White,
+            checkedBorderColor = TvDesign.White,
+            uncheckedThumbColor = TvDesign.White.copy(alpha = .65f),
+            uncheckedTrackColor = TvDesign.SurfaceRaised, uncheckedBorderColor = TvDesign.White.copy(alpha = .25f),
         ),
     )
 }
@@ -70,10 +66,9 @@ internal fun TvContentSettingsRow(
     onEntryFocused: (String) -> Unit,
 ) {
     when {
-        !contentLayout -> TvSettingsRow(entry, requester, first, last, onLeftToSidebar = onLeftToSidebar, onFocused = onFocused)
-        entry.id.startsWith("repo-") -> TvPluginRepositoryCard(entry, entries, requesterFor, onLeftToSidebar, onEntryFocused)
-        entry.providerStatus != null -> TvPluginProviderRow(entry, requester, last, onLeftToSidebar, onFocused)
-        else -> TvSettingsRow(entry, requester, first, last, restoreContentStyle = true, onLeftToSidebar = onLeftToSidebar, onFocused = onFocused)
+        contentLayout && entry.id.startsWith("repo-") -> TvPluginRepositoryCard(entry, entries, requesterFor, onLeftToSidebar, onEntryFocused)
+        contentLayout && entry.providerStatus != null -> TvPluginProviderRow(entry, requester, last, onLeftToSidebar, onFocused)
+        else -> TvSettingsRow(entry, requester, first, last, onLeftToSidebar = onLeftToSidebar, onFocused = onFocused)
     }
 }
 
@@ -96,20 +91,20 @@ private fun TvPluginRepositoryCard(
     var cardFocused by remember(entry.id) { mutableStateOf(false) }
     val shape = RoundedCornerShape(15.dp)
     Column(modifier = Modifier.padding(bottom = if (nextProvider != null) 12.dp else 0.dp)
-        .fillMaxWidth().background(PluginSurface, shape)
+        .fillMaxWidth().background(TvDesign.Surface, shape)
         .onFocusChanged { cardFocused = it.hasFocus }.focusGroup()) {
         Row(
             modifier = Modifier.fillMaxWidth()
                 .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(Modifier.size(36.dp).background(Color(0xFF242424), RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
-                Text("P", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Box(Modifier.size(36.dp).background(TvDesign.SurfaceRaised, RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
+                Text("P", color = TvDesign.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(0.dp)) {
-                Text(entry.title, color = Color.White, fontSize = 17.sp, lineHeight = 19.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(entry.detail.orEmpty(), color = PluginMuted, fontSize = 11.sp, lineHeight = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(entry.title, color = TvDesign.White, fontSize = 17.sp, lineHeight = 19.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(entry.detail.orEmpty(), color = TvDesign.Muted, fontSize = 11.sp, lineHeight = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 entry.operationStatus?.takeIf { it.isNotBlank() }?.let { message ->
                     Text(message, color = TvDesign.Accent, fontSize = 11.sp, maxLines = 2,
                         overflow = TextOverflow.Ellipsis)
@@ -137,7 +132,7 @@ private fun TvPluginRepositoryCard(
                         }, { onEntryFocused(action.id) })
                 }
                 refresh?.let { action ->
-                    TvRepositoryAction(action, Icons.Default.Refresh, Color.White,
+                    TvRepositoryAction(action, Icons.Default.Refresh, TvDesign.White,
                         requesterFor(action.id), Modifier.focusProperties {
                             up = FocusRequester.Default
                             left = remove?.let { requesterFor(it.id) } ?: FocusRequester.Cancel
@@ -174,8 +169,8 @@ private fun TvPluginRepositoryCard(
                                 else -> false
                             }
                         }
-                        .background(if (toggleFocused) PluginFocus else Color.Transparent, RoundedCornerShape(50))
-                        .border(1.dp, if (toggleFocused) Color.White else Color.Transparent, RoundedCornerShape(50))
+                        .background(if (toggleFocused) TvDesign.SurfaceRaised else Color.Transparent, RoundedCornerShape(50))
+                        .border(1.dp, if (toggleFocused) TvDesign.White else Color.Transparent, RoundedCornerShape(50))
                         .focusable(),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -194,8 +189,8 @@ private fun TvRepositoryAction(entry: TvSettingsEntry, icon: ImageVector, tint: 
         modifier = modifier.size(34.dp)
             .focusRequester(requester)
             .onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocused() }
-            .background(if (focused) PluginFocus else Color.Transparent, RoundedCornerShape(50))
-            .border(1.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(50))
+            .background(if (focused) TvDesign.SurfaceRaised else Color.Transparent, RoundedCornerShape(50))
+            .border(1.dp, if (focused) TvDesign.White else Color.Transparent, RoundedCornerShape(50))
             .onPreviewKeyEvent { event ->
                 if (entry.enabled && activation(event.nativeKeyEvent.keyCode)) {
                     if (event.type == KeyEventType.KeyUp) entry.onActivate?.invoke()
@@ -219,8 +214,8 @@ private fun TvPluginProviderRow(entry: TvSettingsEntry, requester: FocusRequeste
         bottomEnd = if (entry.providerPanelEnd) 15.dp else 0.dp,
     )
     Column {
-        if (entry.providerPanelStart) Text("PROVIDERS", color = PluginMuted, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 8.dp, bottom = 10.dp))
-        Column(Modifier.fillMaxWidth().background(PluginSurface, shape)) {
+        if (entry.providerPanelStart) Text("PROVIDERS", color = TvDesign.Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 8.dp, bottom = 10.dp))
+        Column(Modifier.fillMaxWidth().background(TvDesign.Surface, shape)) {
             Row(
                 modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)
                     .focusRequester(requester)
@@ -235,25 +230,25 @@ private fun TvPluginProviderRow(entry: TvSettingsEntry, requester: FocusRequeste
                             else -> false
                         }
                     }
-                    .background(if (focused) PluginFocus else Color.Transparent, shape)
-                    .border(1.dp, if (focused) Color.White else Color.Transparent, shape)
+                    .background(if (focused) TvDesign.SurfaceRaised else Color.Transparent, shape)
+                    .border(1.dp, if (focused) TvDesign.White else Color.Transparent, shape)
                     .focusable().padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(0.dp)) {
-                    Text(entry.title, color = Color.White, fontSize = 16.sp, lineHeight = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(entry.subtitle, color = PluginMuted, fontSize = 10.sp, lineHeight = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(entry.title, color = TvDesign.White, fontSize = 16.sp, lineHeight = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(entry.subtitle, color = TvDesign.Muted, fontSize = 10.sp, lineHeight = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text(entry.providerStatus.orEmpty(), color = if (entry.providerFailed) PluginFailure else if (entry.switchChecked == false) PluginMuted else Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                    entry.providerResponse?.let { Text(it, color = PluginMuted, fontSize = 10.sp) }
+                    Text(entry.providerStatus.orEmpty(), color = if (entry.providerFailed) MaterialTheme.colorScheme.error else if (entry.switchChecked == false) TvDesign.Muted else TvDesign.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    entry.providerResponse?.let { Text(it, color = TvDesign.Muted, fontSize = 10.sp) }
                 }
-                Text("›", color = PluginMuted, fontSize = 22.sp, modifier = Modifier.padding(horizontal = 12.dp))
+                Text("›", color = TvDesign.Muted, fontSize = 22.sp, modifier = Modifier.padding(horizontal = 12.dp))
                 Box(Modifier.width(64.dp).height(34.dp), contentAlignment = Alignment.Center) {
                     TvContentToggle(entry.switchChecked == true, compact = true)
                 }
             }
-            if (!entry.providerPanelEnd) Box(Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = .08f)))
+            if (!entry.providerPanelEnd) Box(Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(1.dp).background(TvDesign.White.copy(alpha = .08f)))
         }
     }
 }

@@ -43,7 +43,7 @@ internal fun TvAccountSummaryPanel(
     val enabledActions = actions.filter { it.enabled }
     val nextOption = entries.firstOrNull { it.enabled && it.id !in actionIds }
     Column(
-        Modifier.fillMaxWidth().background(TvDesign.Surface, RoundedCornerShape(12.dp)).padding(16.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -90,7 +90,7 @@ internal fun TvAccountSummaryPanel(
                                 else -> false
                             }
                         }
-                        .background(if (focused) TvDesign.White.copy(alpha = .18f) else TvDesign.White.copy(alpha = .06f), shape)
+                        .background(if (focused) TvDesign.SurfaceRaised else TvDesign.Surface, shape)
                         .border(if (focused) 1.5.dp else 0.dp, if (focused) TvDesign.White else TvDesign.Surface, shape)
                         .focusable(enabled = action.enabled)
                         .padding(horizontal = 18.dp, vertical = 10.dp),
