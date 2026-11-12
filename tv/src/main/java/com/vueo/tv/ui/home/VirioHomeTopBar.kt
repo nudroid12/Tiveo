@@ -1,6 +1,7 @@
 package com.vueo.tv.home
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -140,13 +141,11 @@ internal fun TiveoTopBar(
         topBarTabs.forEachIndexed { index, tab ->
             val focused = state.focusedTab == tab
             val isSelected = tab == selected
+            val showUnderline = tab == (state.focusedTab ?: selected)
+            val shrinkUnderline = showUnderline && !focused
             val underlineScale by animateFloatAsState(
-                targetValue = when {
-                    focused -> 1f
-                    isSelected -> .38f
-                    else -> 0f
-                },
-                animationSpec = tween(durationMillis = 145),
+                targetValue = if (shrinkUnderline) .38f else 1f,
+                animationSpec = if (shrinkUnderline) tween(durationMillis = 210) else snap(),
                 label = "tabUnderline",
             )
             Column(
@@ -195,7 +194,10 @@ internal fun TiveoTopBar(
                         .padding(top = 4.dp)
                         .fillMaxWidth()
                         .height(2.dp)
-                        .graphicsLayer { scaleX = underlineScale }
+                        .graphicsLayer {
+                            alpha = if (showUnderline) 1f else 0f
+                            scaleX = if (shrinkUnderline) underlineScale else 1f
+                        }
                         .background(Color.White, RoundedCornerShape(1.dp)),
                 )
             }
