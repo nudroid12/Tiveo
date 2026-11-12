@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -121,6 +122,7 @@ internal data class TvSettingsEntry(
     val operationStatus: String? = null,
     val iconDrawableRes: Int? = null,
     val showDivider: Boolean = true,
+    val formControl: (@Composable (Modifier, () -> Unit, Boolean) -> Unit)? = null,
 )
 
 internal data class TvSettingsNavItem(
@@ -1209,6 +1211,18 @@ internal fun TvSettingsRow(
     onLeftToSidebar: () -> Unit,
     onFocused: () -> Unit,
 ) {
+    entry.formControl?.let { control ->
+        Box(modifier.fillMaxWidth().padding(vertical = 4.dp), contentAlignment = Alignment.Center) {
+            control(
+                Modifier.widthIn(max = 460.dp).fillMaxWidth()
+                    .focusRequester(requester)
+                    .onFocusChanged { if (it.isFocused) onFocused() },
+                onLeftToSidebar,
+                first,
+            )
+        }
+        return
+    }
     if (entry.catalogControls) {
         TvCatalogControlsRow(entry, requester, first, last, modifier, onLeftToSidebar, onFocused)
         return
