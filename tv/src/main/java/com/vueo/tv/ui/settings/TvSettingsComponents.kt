@@ -79,6 +79,7 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -896,6 +897,7 @@ internal fun TvSettingsListScreen(
     preferredFocusId: String? = null,
     addonLayout: Boolean = false,
     contentManager: Boolean = false,
+    centerHeader: Boolean = false,
 ) {
     val embeddedHost = LocalTvSettingsEmbeddedHost.current
     if (embeddedHost != null) {
@@ -910,6 +912,7 @@ internal fun TvSettingsListScreen(
             preferredFocusId = preferredFocusId,
             addonLayout = addonLayout,
             contentManager = contentManager,
+            centerHeader = centerHeader,
         )
         return
     }
@@ -987,6 +990,8 @@ internal fun TvSettingsListScreen(
 
             Text(
                 text = title,
+                modifier = if (centerHeader) Modifier.fillMaxWidth() else Modifier,
+                textAlign = if (centerHeader) TextAlign.Center else TextAlign.Start,
                 color = TvDesign.White,
                 fontSize = 28.sp,
                 fontWeight = FontWeight.Bold,
@@ -994,10 +999,12 @@ internal fun TvSettingsListScreen(
             if (subtitle.isNotBlank()) {
                 Text(
                     text = subtitle,
+                    textAlign = if (centerHeader) TextAlign.Center else TextAlign.Start,
                     color = TvDesign.Muted,
                     fontSize = 12.sp,
                     lineHeight = 16.sp,
-                    modifier = Modifier.padding(top = 6.dp, bottom = 16.dp),
+                    modifier = (if (centerHeader) Modifier.fillMaxWidth() else Modifier)
+                    .padding(top = 6.dp, bottom = 16.dp),
                 )
             } else {
                 Spacer(Modifier.height(12.dp))
@@ -1098,6 +1105,7 @@ private fun TvSettingsEmbeddedPanel(
     preferredFocusId: String?,
     addonLayout: Boolean = false,
     contentManager: Boolean = false,
+    centerHeader: Boolean = false,
 ) {
     val accountHeader = title == "Account" && entries.any { it.id == "sync-now" }
     val accountHeaderIds = setOf("status", "message", "sync-all", "sync-now", "sign-out", "cancel-sign-out")
@@ -1129,6 +1137,8 @@ private fun TvSettingsEmbeddedPanel(
 
         Text(
             text = title,
+            modifier = if (centerHeader) Modifier.fillMaxWidth() else Modifier,
+            textAlign = if (centerHeader) TextAlign.Center else TextAlign.Start,
             color = TvDesign.White,
             fontSize = 29.sp,
             fontWeight = FontWeight.Bold,
@@ -1136,10 +1146,12 @@ private fun TvSettingsEmbeddedPanel(
         if (subtitle.isNotBlank()) {
             Text(
                 text = subtitle,
+                textAlign = if (centerHeader) TextAlign.Center else TextAlign.Start,
                 color = TvDesign.Muted,
                 fontSize = 13.sp,
                 lineHeight = 18.sp,
-                modifier = Modifier.padding(top = 5.dp, bottom = 16.dp),
+                modifier = (if (centerHeader) Modifier.fillMaxWidth() else Modifier)
+                    .padding(top = 5.dp, bottom = 16.dp),
             )
         } else {
             Spacer(Modifier.height(12.dp))
@@ -1222,6 +1234,24 @@ internal fun TvSettingsRow(
     onLeftToSidebar: () -> Unit,
     onFocused: () -> Unit,
 ) {
+    if (entry.identityCard) {
+        val logo = checkNotNull(entry.iconDrawableRes)
+        Box(
+            modifier = modifier.fillMaxWidth().padding(bottom = 10.dp)
+                .background(TvDesign.Surface, TvDesign.CardShape)
+                .border(1.dp, TvDesign.White.copy(alpha = .14f), TvDesign.CardShape)
+                .padding(vertical = 24.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(
+                painter = painterResource(logo),
+                contentDescription = entry.title,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.width(156.dp).height(36.dp),
+            )
+        }
+        return
+    }
     entry.formControl?.let { control ->
         Box(modifier.fillMaxWidth().padding(vertical = 4.dp), contentAlignment = Alignment.Center) {
             control(
@@ -1244,14 +1274,13 @@ internal fun TvSettingsRow(
     }
     var focused by remember(entry.id) { mutableStateOf(false) }
     val canAdjust = entry.onPrevious != null || entry.onNext != null
-    val shape = TvDesign.CardShape
+    val shape = if (entry.actionCard) RoundedCornerShape(50) else TvDesign.CardShape
     val divider = TvDesign.White.copy(alpha = .09f)
 
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .then(if (entry.identityCard) Modifier.padding(bottom = 10.dp) else Modifier)
-            .heightIn(min = if (entry.identityCard) 96.dp else if (compact) 48.dp else 58.dp)
+            .heightIn(min = if (compact) 48.dp else 58.dp)
             .focusRequester(requester)
             .onFocusChanged {
                 focused = it.isFocused
@@ -1303,7 +1332,7 @@ internal fun TvSettingsRow(
             .background(
                 when {
                     focused -> TvDesign.SurfaceRaised
-                    entry.identityCard || entry.actionCard -> TvDesign.Surface
+                    entry.actionCard -> TvDesign.Surface
                     else -> Color.Transparent
                 },
                 shape,
@@ -1313,7 +1342,7 @@ internal fun TvSettingsRow(
                 when {
                     focused && entry.accented -> TvDesign.Accent
                     focused -> TvDesign.Focus.copy(alpha = .75f)
-                    entry.identityCard || entry.actionCard -> TvDesign.White.copy(alpha = .14f)
+                    entry.actionCard -> TvDesign.White.copy(alpha = .14f)
                     else -> Color.Transparent
                 },
                 shape,
@@ -1332,7 +1361,7 @@ internal fun TvSettingsRow(
             Image(
                 painter = painterResource(entry.iconDrawableRes),
                 contentDescription = null,
-                modifier = Modifier.size(if (entry.identityCard) 64.dp else if (compact) 32.dp else 44.dp),
+                modifier = Modifier.size(if (compact) 32.dp else 44.dp),
             )
             Spacer(Modifier.width(14.dp))
         } else if (!entry.badge.isNullOrBlank()) {
@@ -1392,8 +1421,8 @@ internal fun TvSettingsRow(
             Text(
                 text = entry.title,
                 color = if (entry.enabled) TvDesign.White else TvDesign.Dim,
-                fontSize = if (entry.identityCard) 22.sp else 16.sp,
-                fontWeight = if (focused || entry.identityCard) FontWeight.SemiBold else FontWeight.Medium,
+                fontSize = 16.sp,
+                fontWeight = if (focused) FontWeight.SemiBold else FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

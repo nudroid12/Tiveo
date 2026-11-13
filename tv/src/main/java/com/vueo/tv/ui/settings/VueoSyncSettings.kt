@@ -130,6 +130,7 @@ internal fun TvVueoSyncSettings(onNavigate: (String)->Unit,onProfile: ()->Unit,o
         if (connected) "Your library and connections across mobile and TV."
         else "Use the same account you use on mobile.",
         entries, onNavigate, onProfile, onBack,
+        centerHeader = !connected,
     )
 }
 

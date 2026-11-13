@@ -6,6 +6,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -136,8 +137,9 @@ internal fun TiveoTopBar(
 ) {
     var barBounds by remember { mutableStateOf<Rect?>(null) }
     val tabBounds = remember { mutableStateMapOf<String, Rect>() }
+    var barHasFocus by remember { mutableStateOf(false) }
     val barAlpha by animateFloatAsState(
-        targetValue = if (state.hasFocus) 1f else .82f,
+        targetValue = if (barHasFocus) 1f else .82f,
         animationSpec = tween(durationMillis = 180),
         label = "topBarFocusAlpha",
     )
@@ -153,7 +155,9 @@ internal fun TiveoTopBar(
             modifier = Modifier
                 .matchParentSize()
                 .padding(horizontal = MODERN_HOME_CONTENT_START_PADDING)
-                .graphicsLayer { alpha = barAlpha },
+                .graphicsLayer { alpha = barAlpha }
+                .onFocusChanged { barHasFocus = it.hasFocus }
+                .focusGroup(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -163,7 +167,6 @@ internal fun TiveoTopBar(
                 modifier = Modifier.padding(end = 14.dp).width(94.dp).height(28.dp),
             )
             topBarTabs.forEachIndexed { index, tab ->
-                val focused = !state.settingsPanelTransition && state.focusedTab == tab
                 val isSelected = tab == selected
                 Column(
                     modifier = Modifier
@@ -210,7 +213,7 @@ internal fun TiveoTopBar(
                 ) {
                     Text(
                         text = if (tab == "Library") "My List" else tab,
-                        color = if (isSelected || focused) Color.White else Color.White.copy(alpha = .76f),
+                        color = if (isSelected) Color.White else Color.White.copy(alpha = .76f),
                         fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
@@ -223,7 +226,7 @@ internal fun TiveoTopBar(
 
 
         val bounds = barBounds
-        val selectedBounds = tabBounds[if (state.settingsPanelTransition) selected else state.focusedTab ?: selected]
+        val selectedBounds = tabBounds[selected]
         if (bounds != null && selectedBounds != null) {
             val center by animateFloatAsState(
                 targetValue = selectedBounds.center.x - bounds.left,
@@ -232,7 +235,7 @@ internal fun TiveoTopBar(
             )
             val width by animateFloatAsState(
                 targetValue = (selectedBounds.width - with(LocalDensity.current) { 20.dp.toPx() }).coerceAtLeast(0f) *
-                    if (state.hasFocus) 1f else .38f,
+                    if (barHasFocus) 1f else .38f,
                 animationSpec = tween(durationMillis = 210),
                 label = "tabUnderlineWidth",
             )

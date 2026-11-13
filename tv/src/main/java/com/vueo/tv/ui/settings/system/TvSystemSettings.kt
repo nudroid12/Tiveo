@@ -220,12 +220,18 @@ internal fun TvAboutSettings(
 
     val entries = listOf(
         TvSettingsEntry(
-            id = "tiveo-about",
+            id = "tiveo-about-logo",
             title = "Tiveo",
-            subtitle = BuildConfig.VERSION_NAME,
-            showDivider = false,
+            subtitle = "",
+            enabled = false,
             identityCard = true,
-            iconDrawableRes = R.drawable.tiveo_tv_installer_icon,
+            iconDrawableRes = R.drawable.virio_wordmark,
+        ),
+        TvSettingsEntry(
+            id = "tiveo-about",
+            title = "Version",
+            subtitle = "",
+            value = BuildConfig.VERSION_NAME,
             onActivate = {
                 if (developerOptionsEnabled) {
                     onUnlockNotice("Developer options are already unlocked.")
@@ -261,7 +267,7 @@ internal fun TvAboutSettings(
         ),
     )
     TvSettingsListScreen(
-        "About Tiveo", "",
+        "About Tiveo", "App information and updates",
         entries, onNavigate, onProfile, onBack,
     )
 }
