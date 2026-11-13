@@ -13,18 +13,24 @@ import android.view.KeyEvent
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import kotlinx.coroutines.launch
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -49,12 +55,15 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -180,6 +189,83 @@ internal fun TvProviderDiagnosticDialog(
     }
 }
 
+
+@Composable
+private fun TvDiagnosticsSearchField(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onFocusChanged: (Boolean) -> Unit,
+    modifier: Modifier,
+) {
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    var editing by remember { mutableStateOf(false) }
+    var keyboardRequest by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(editing, keyboardRequest) {
+        if (editing) {
+            withFrameNanos { }
+            keyboard?.show()
+        }
+    }
+
+    BasicTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        modifier = modifier
+            .onFocusChanged {
+                onFocusChanged(it.isFocused)
+                if (!it.isFocused && editing) {
+                    editing = false
+                    keyboard?.hide()
+                }
+            }
+            .onPreviewKeyEvent { event ->
+                val key = event.nativeKeyEvent
+                when (key.keyCode) {
+                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                        if (key.action == KeyEvent.ACTION_UP) {
+                            editing = true
+                            keyboardRequest++
+                        }
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        if (editing) false
+                        else {
+                            if (key.action == KeyEvent.ACTION_DOWN) {
+                                val direction = if (key.keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                                    FocusDirection.Up
+                                } else {
+                                    FocusDirection.Down
+                                }
+                                focusManager.moveFocus(direction)
+                            }
+                            true
+                        }
+                    }
+                    else -> false
+                }
+            },
+        readOnly = !editing,
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done, showKeyboardOnFocus = false),
+        keyboardActions = KeyboardActions(onDone = {
+            editing = false
+            keyboard?.hide()
+        }),
+        textStyle = TextStyle(color = TvDesign.White, fontSize = 13.sp),
+        cursorBrush = SolidColor(TvDesign.Accent),
+        decorationBox = { innerTextField ->
+            Box(contentAlignment = Alignment.CenterStart) {
+                if (query.isBlank()) {
+                    Text("Search diagnostic…", color = TvDesign.Muted, fontSize = 13.sp)
+                }
+                innerTextField()
+            }
+        },
+    )
+}
 
 @Composable
 internal fun TvRuntimeDiagnosticsDialog(
@@ -384,35 +470,17 @@ internal fun TvRuntimeDiagnosticsDialog(
                 ) {
                     Text("⌕", color = TvDesign.Muted, fontSize = 18.sp)
                     Spacer(Modifier.width(8.dp))
-                    BasicTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
+                    TvDiagnosticsSearchField(
+                        query = searchQuery,
+                        onQueryChange = { searchQuery = it },
+                        onFocusChanged = { searchFocused = it },
                         modifier = Modifier
                             .weight(1f)
                             .focusRequester(searchFocus)
-                            .onFocusChanged { searchFocused = it.isFocused }
                             .focusProperties {
                                 up = if (showRaw) rawFocus else summaryFocus
                                 down = copyFocus
                             },
-                        singleLine = true,
-                        textStyle = androidx.compose.ui.text.TextStyle(
-                            color = TvDesign.White,
-                            fontSize = 13.sp,
-                        ),
-                        cursorBrush = androidx.compose.ui.graphics.SolidColor(TvDesign.Accent),
-                        decorationBox = { innerTextField ->
-                            Box(contentAlignment = Alignment.CenterStart) {
-                                if (searchQuery.isBlank()) {
-                                    Text(
-                                        "Search diagnostic…",
-                                        color = TvDesign.Muted,
-                                        fontSize = 13.sp,
-                                    )
-                                }
-                                innerTextField()
-                            }
-                        },
                     )
                     if (searchQuery.isNotEmpty()) {
                         TextButton(
@@ -812,35 +880,17 @@ internal fun TvPerformanceDiagnosticsDialog(
                 ) {
                     Text("⌕", color = TvDesign.Muted, fontSize = 18.sp)
                     Spacer(Modifier.width(8.dp))
-                    BasicTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
+                    TvDiagnosticsSearchField(
+                        query = searchQuery,
+                        onQueryChange = { searchQuery = it },
+                        onFocusChanged = { searchFocused = it },
                         modifier = Modifier
                             .weight(1f)
                             .focusRequester(searchFocus)
-                            .onFocusChanged { searchFocused = it.isFocused }
                             .focusProperties {
                                 up = tabFocusers[focusedTabIndex.coerceIn(tabFocusers.indices)]
                                 down = copyFocus
                             },
-                        singleLine = true,
-                        textStyle = androidx.compose.ui.text.TextStyle(
-                            color = TvDesign.White,
-                            fontSize = 13.sp,
-                        ),
-                        cursorBrush = androidx.compose.ui.graphics.SolidColor(TvDesign.Accent),
-                        decorationBox = { innerTextField ->
-                            Box(contentAlignment = Alignment.CenterStart) {
-                                if (searchQuery.isBlank()) {
-                                    Text(
-                                        "Search diagnostic…",
-                                        color = TvDesign.Muted,
-                                        fontSize = 13.sp,
-                                    )
-                                }
-                                innerTextField()
-                            }
-                        },
                     )
                     if (searchQuery.isNotEmpty()) {
                         TextButton(
