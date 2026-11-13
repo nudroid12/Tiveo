@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SettingsInputComponent
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -238,7 +239,12 @@ internal fun TvSettingsScreen(
         preferences.edit().putStringSet(HIDDEN_SETTINGS_CATEGORIES, updated).apply()
     }
 
+    DisposableEffect(topBar, active) {
+        onDispose { if (active) topBar.settingsPanelTransition = false }
+    }
+
     fun openPanel(next: TvSettingsPage) {
+        if (active) topBar.settingsPanelTransition = true
         page = next
         panelAutoFocusToken += 1
     }
@@ -264,6 +270,7 @@ internal fun TvSettingsScreen(
     }
 
     fun backPanel() {
+        if (active) topBar.settingsPanelTransition = true
         page = when (visiblePage) {
             TvSettingsPage.CONTENT_PROVIDER_HEALTH -> TvSettingsPage.CONTENT_PROVIDERS
             TvSettingsPage.CONTENT_ADDONS,

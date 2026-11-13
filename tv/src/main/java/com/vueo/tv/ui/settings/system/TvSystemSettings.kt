@@ -222,8 +222,9 @@ internal fun TvAboutSettings(
         TvSettingsEntry(
             id = "tiveo-about",
             title = "Tiveo",
-            subtitle = "",
-            value = BuildConfig.VERSION_NAME,
+            subtitle = BuildConfig.VERSION_NAME,
+            showDivider = false,
+            identityCard = true,
             iconDrawableRes = R.drawable.tiveo_tv_installer_icon,
             onActivate = {
                 if (developerOptionsEnabled) {
@@ -244,18 +245,18 @@ internal fun TvAboutSettings(
         ),
         TvSettingsEntry(
             "update",
-            "Check for Updates",
-            status?.takeUnless { it == "You're up to date." }.orEmpty(),
-            when {
-                checking -> "Checking…"
-                downloading -> "$progress%"
-                available != null && TvUpdateManager.needsInstallPermission(context) -> "Allow"
-                available != null -> "Update ${available.versionName}"
-                status == "You're up to date." -> "Up to date"
-                else -> "Check"
+            title = when {
+                checking -> "Checking for Updates…"
+                downloading -> "Downloading Update…"
+                available != null && TvUpdateManager.needsInstallPermission(context) -> "Allow Installation"
+                available != null -> "Install Update"
+                else -> "Check for Updates"
             },
+            subtitle = status ?: available?.versionName?.let { "New version · $it" }.orEmpty(),
+            value = if (downloading) "$progress%" else "",
             onActivate = ::updateAction,
             showDivider = false,
+            actionCard = true,
             icon = Icons.Default.Refresh,
         ),
     )

@@ -122,6 +122,8 @@ internal data class TvSettingsEntry(
     val operationStatus: String? = null,
     val iconDrawableRes: Int? = null,
     val showDivider: Boolean = true,
+    val identityCard: Boolean = false,
+    val actionCard: Boolean = false,
     val formControl: (@Composable (Modifier, () -> Unit, Boolean) -> Unit)? = null,
 )
 
@@ -245,6 +247,7 @@ internal fun TvSettingsMasterDetailShell(
     fun focusGlobalNav() {
         categorySelectJob?.cancel()
         panelRestoreJob?.cancel()
+        topBar.settingsPanelTransition = false
         topBar.focus("Settings")
     }
 
@@ -253,14 +256,21 @@ internal fun TvSettingsMasterDetailShell(
         appliedPanelFocusToken = panelAutoFocusToken
         lastPane = "category"
         val requester = categoryRequesters.getValue(selectedCategoryId)
-        if (runCatching { requester.requestFocus() }.getOrDefault(false)) return true
+        if (runCatching { requester.requestFocus() }.getOrDefault(false)) {
+            topBar.settingsPanelTransition = false
+            return true
+        }
         val index = categories.indexOfFirst { it.id == selectedCategoryId }
-        if (index < 0) return false
+        if (index < 0) {
+            topBar.settingsPanelTransition = false
+            return false
+        }
         shellScope.launch {
             categoryListState.scrollToItem(index)
             withFrameNanos { }
-            if (lastPane == "category" && !topBar.hasFocus) {
+            if (lastPane == "category" && !topBar.hasFocus && panelKey == currentPanelKey) {
                 runCatching { requester.requestFocus() }
+                topBar.settingsPanelTransition = false
             }
         }
         return true
@@ -277,6 +287,7 @@ internal fun TvSettingsMasterDetailShell(
         panelLastFocusedIds[panelKey] = rowId
         lastPane = "panel"
         appliedPanelFocusToken = panelAutoFocusToken
+        topBar.settingsPanelTransition = false
         return true
     }
 
@@ -1239,7 +1250,8 @@ internal fun TvSettingsRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .heightIn(min = if (compact) 48.dp else 58.dp)
+            .then(if (entry.identityCard) Modifier.padding(bottom = 10.dp) else Modifier)
+            .heightIn(min = if (entry.identityCard) 96.dp else if (compact) 48.dp else 58.dp)
             .focusRequester(requester)
             .onFocusChanged {
                 focused = it.isFocused
@@ -1288,12 +1300,20 @@ internal fun TvSettingsRow(
                     else -> false
                 }
             }
-            .background(if (focused) TvDesign.SurfaceRaised else Color.Transparent, shape)
+            .background(
+                when {
+                    focused -> TvDesign.SurfaceRaised
+                    entry.identityCard || entry.actionCard -> TvDesign.Surface
+                    else -> Color.Transparent
+                },
+                shape,
+            )
             .border(
                 1.dp,
                 when {
                     focused && entry.accented -> TvDesign.Accent
                     focused -> TvDesign.Focus.copy(alpha = .75f)
+                    entry.identityCard || entry.actionCard -> TvDesign.White.copy(alpha = .14f)
                     else -> Color.Transparent
                 },
                 shape,
@@ -1312,7 +1332,7 @@ internal fun TvSettingsRow(
             Image(
                 painter = painterResource(entry.iconDrawableRes),
                 contentDescription = null,
-                modifier = Modifier.size(if (compact) 32.dp else 44.dp),
+                modifier = Modifier.size(if (entry.identityCard) 64.dp else if (compact) 32.dp else 44.dp),
             )
             Spacer(Modifier.width(14.dp))
         } else if (!entry.badge.isNullOrBlank()) {
@@ -1372,8 +1392,8 @@ internal fun TvSettingsRow(
             Text(
                 text = entry.title,
                 color = if (entry.enabled) TvDesign.White else TvDesign.Dim,
-                fontSize = 16.sp,
-                fontWeight = if (focused) FontWeight.SemiBold else FontWeight.Medium,
+                fontSize = if (entry.identityCard) 22.sp else 16.sp,
+                fontWeight = if (focused || entry.identityCard) FontWeight.SemiBold else FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

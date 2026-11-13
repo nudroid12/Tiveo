@@ -68,6 +68,7 @@ internal class TiveoTopBarState {
         private set
     val hasFocus: Boolean get() = focusedTab != null
     var focusBlocked by mutableStateOf(false)
+    var settingsPanelTransition by mutableStateOf(false)
 
     var pendingContentTab by mutableStateOf<String?>(null)
         private set
@@ -78,6 +79,7 @@ internal class TiveoTopBarState {
         runCatching { requesterFor(tab).requestFocus() }.getOrDefault(false)
 
     fun updateFocus(tab: String, focused: Boolean) {
+        if (focused && settingsPanelTransition) return
         if (focused) {
             focusedTab = tab
             pendingContentTab = null
@@ -161,13 +163,13 @@ internal fun TiveoTopBar(
                 modifier = Modifier.padding(end = 14.dp).width(94.dp).height(28.dp),
             )
             topBarTabs.forEachIndexed { index, tab ->
-                val focused = state.focusedTab == tab
+                val focused = !state.settingsPanelTransition && state.focusedTab == tab
                 val isSelected = tab == selected
                 Column(
                     modifier = Modifier
                         .focusRequester(state.requesterFor(tab))
                         .focusProperties {
-                            this.canFocus = canFocus
+                            this.canFocus = canFocus && !state.settingsPanelTransition
                             left = topBarTabs.getOrNull(index - 1)?.let(state::requesterFor) ?: FocusRequester.Cancel
                             right = topBarTabs.getOrNull(index + 1)?.let(state::requesterFor) ?: FocusRequester.Cancel
                             up = FocusRequester.Cancel
@@ -177,7 +179,7 @@ internal fun TiveoTopBar(
                         .onPreviewKeyEvent { event ->
                             when (event.key) {
                                 Key.DirectionLeft, Key.DirectionRight -> {
-                                    if (canFocus && event.type == KeyEventType.KeyDown) {
+                                    if (canFocus && !state.settingsPanelTransition && event.type == KeyEventType.KeyDown) {
                                         val step = if (event.key == Key.DirectionLeft) -1 else 1
                                         val destination = topBarTabs.getOrNull(index + step)
                                         if (destination != null && state.focus(destination)) onNavigate(destination)
@@ -185,7 +187,7 @@ internal fun TiveoTopBar(
                                     true
                                 }
                                 Key.DirectionDown -> {
-                                    if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount == 0) {
+                                    if (canFocus && !state.settingsPanelTransition && event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount == 0) {
                                         onReturnToContent()
                                     }
                                     true
@@ -195,7 +197,8 @@ internal fun TiveoTopBar(
                         }
                         .semantics { this.selected = isSelected }
                         .clickable(role = Role.Tab) {
-                            when (tab) {
+                            if (state.settingsPanelTransition) return@clickable
+                        when (tab) {
                                 selected -> onReturnToContent()
                                 else -> onNavigate(tab)
                             }
@@ -220,7 +223,7 @@ internal fun TiveoTopBar(
 
 
         val bounds = barBounds
-        val selectedBounds = tabBounds[state.focusedTab ?: selected]
+        val selectedBounds = tabBounds[if (state.settingsPanelTransition) selected else state.focusedTab ?: selected]
         if (bounds != null && selectedBounds != null) {
             val center by animateFloatAsState(
                 targetValue = selectedBounds.center.x - bounds.left,
