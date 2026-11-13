@@ -38,14 +38,15 @@ internal fun TvSettingsEntry.isRepositoryAction(): Boolean =
     id == "refresh-repository" || id == "remove-repository"
 
 @Composable
-internal fun TvContentToggle(checked: Boolean, compact: Boolean = false) {
+internal fun TvContentToggle(checked: Boolean, compact: Boolean = false, focused: Boolean = false) {
     // The enclosing row handles D-pad activation; this switch displays that same saved state.
     Switch(
         checked = checked, onCheckedChange = null,
         modifier = if (compact) Modifier.graphicsLayer { scaleX = .82f; scaleY = .82f } else Modifier,
         colors = SwitchDefaults.colors(
-            checkedThumbColor = TvDesign.Black, checkedTrackColor = TvDesign.White,
-            checkedBorderColor = TvDesign.White,
+            checkedThumbColor = if (focused) TvDesign.White else TvDesign.Black,
+            checkedTrackColor = if (focused) TvDesign.Black else TvDesign.White,
+            checkedBorderColor = if (focused) TvDesign.Black else TvDesign.White,
             uncheckedThumbColor = TvDesign.White.copy(alpha = .65f),
             uncheckedTrackColor = TvDesign.SurfaceRaised, uncheckedBorderColor = TvDesign.White.copy(alpha = .25f),
         ),
@@ -189,7 +190,7 @@ private fun TvRepositoryAction(entry: TvSettingsEntry, icon: ImageVector, tint: 
         modifier = modifier.size(34.dp)
             .focusRequester(requester)
             .onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocused() }
-            .background(if (focused) TvDesign.SurfaceRaised else Color.Transparent, RoundedCornerShape(50))
+            .background(if (focused) TvDesign.White else Color.Transparent, RoundedCornerShape(50))
             .border(1.dp, if (focused) TvDesign.White else Color.Transparent, RoundedCornerShape(50))
             .onPreviewKeyEvent { event ->
                 if (entry.enabled && activation(event.nativeKeyEvent.keyCode)) {
@@ -200,7 +201,7 @@ private fun TvRepositoryAction(entry: TvSettingsEntry, icon: ImageVector, tint: 
         contentAlignment = Alignment.Center,
     ) {
         Icon(icon, contentDescription = if (refreshing) "Refreshing repository" else entry.title,
-            tint = tint, modifier = Modifier.size(20.dp).then(tvContentRefreshMotion(entry)))
+            tint = if (focused) TvDesign.Black else tint, modifier = Modifier.size(20.dp).then(tvContentRefreshMotion(entry)))
     }
 }
 
@@ -214,7 +215,7 @@ private fun TvPluginProviderRow(entry: TvSettingsEntry, requester: FocusRequeste
         bottomEnd = if (entry.providerPanelEnd) 15.dp else 0.dp,
     )
     Column {
-        if (entry.providerPanelStart) Text("PROVIDERS", color = TvDesign.Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 8.dp, bottom = 10.dp))
+        if (entry.providerPanelStart) Text("PROVIDERS", color = if (focused) TvDesign.Black else TvDesign.Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 8.dp, bottom = 10.dp))
         Column(Modifier.fillMaxWidth().background(TvDesign.Surface, shape)) {
             Row(
                 modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)
@@ -230,22 +231,22 @@ private fun TvPluginProviderRow(entry: TvSettingsEntry, requester: FocusRequeste
                             else -> false
                         }
                     }
-                    .background(if (focused) TvDesign.SurfaceRaised else Color.Transparent, shape)
+                    .background(if (focused) TvDesign.White else Color.Transparent, shape)
                     .border(1.dp, if (focused) TvDesign.White else Color.Transparent, shape)
                     .focusable().padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(entry.title, color = TvDesign.White, fontSize = 16.sp, lineHeight = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(entry.subtitle, color = TvDesign.Muted, fontSize = 10.sp, lineHeight = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(entry.title, color = if (focused) TvDesign.Black else TvDesign.White, fontSize = 16.sp, lineHeight = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(entry.subtitle, color = if (focused) TvDesign.Black else TvDesign.Muted, fontSize = 10.sp, lineHeight = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text(entry.providerStatus.orEmpty(), color = if (entry.providerFailed) MaterialTheme.colorScheme.error else if (entry.switchChecked == false) TvDesign.Muted else TvDesign.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                    entry.providerResponse?.let { Text(it, color = TvDesign.Muted, fontSize = 10.sp) }
+                    Text(entry.providerStatus.orEmpty(), color = if (focused) TvDesign.Black else if (entry.providerFailed) MaterialTheme.colorScheme.error else if (entry.switchChecked == false) TvDesign.Muted else TvDesign.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    entry.providerResponse?.let { Text(it, color = if (focused) TvDesign.Black else TvDesign.Muted, fontSize = 10.sp) }
                 }
-                Text("›", color = TvDesign.Muted, fontSize = 22.sp, modifier = Modifier.padding(horizontal = 12.dp))
+                Text("›", color = if (focused) TvDesign.Black else TvDesign.Muted, fontSize = 22.sp, modifier = Modifier.padding(horizontal = 12.dp))
                 Box(Modifier.width(64.dp).height(34.dp), contentAlignment = Alignment.Center) {
-                    TvContentToggle(entry.switchChecked == true, compact = true)
+                    TvContentToggle(entry.switchChecked == true, compact = true, focused = focused)
                 }
             }
             if (!entry.providerPanelEnd) Box(Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(1.dp).background(TvDesign.White.copy(alpha = .08f)))

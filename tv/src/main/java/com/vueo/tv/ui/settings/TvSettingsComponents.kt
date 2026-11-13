@@ -316,7 +316,8 @@ internal fun TvSettingsMasterDetailShell(
         PerformanceDiagnostics.captureRuntimeEvent(
             "TV_TAB_BACK tab=Settings action=" + when {
                 backExitPending || topBar.hasFocus -> "home"
-                panelHasBack -> "panel_parent"
+                lastPane == "panel" && panelHasBack -> "panel_parent"
+                lastPane == "panel" -> "category"
                 else -> "open_navigation"
             }
         )
@@ -326,7 +327,8 @@ internal fun TvSettingsMasterDetailShell(
                 panelRestoreJob?.cancel()
                 onBack()
             }
-            panelHasBack -> onPanelBack()
+            lastPane == "panel" && panelHasBack -> onPanelBack()
+            lastPane == "panel" -> focusSelectedCategory()
             else -> {
                 backExitPending = true
                 focusGlobalNav()
@@ -482,8 +484,10 @@ internal fun TvSettingsMasterDetailShell(
                     requestDeferredPanelRestore = { requestDeferredPanelRestore() },
                     onLeftToCategory = { focusSelectedCategory() },
                     onRowFocused = { rowId ->
-                        panelLastFocusedIds[panelKey] = rowId
-                        if (active && !topBar.hasFocus) {
+                        if (active && !topBar.hasFocus && !explicitPanelFocusPending &&
+                            !topBar.settingsPanelTransition
+                        ) {
+                            panelLastFocusedIds[panelKey] = rowId
                             lastPane = "panel"
                         }
                     },
@@ -562,15 +566,10 @@ private fun TvSettingsCategoryRow(
             }
             .background(
                 when {
-                    focused -> TvDesign.SurfaceRaised
+                    focused -> TvDesign.White
                     selected -> TvDesign.SurfaceRaised.copy(alpha = .55f)
                     else -> Color.Transparent
                 },
-                TvDesign.CardShape,
-            )
-            .border(
-                1.dp,
-                if (focused) TvDesign.Focus.copy(alpha = .75f) else Color.Transparent,
                 TvDesign.CardShape,
             )
             .focusable()
@@ -579,7 +578,7 @@ private fun TvSettingsCategoryRow(
     ) {
         Text(
             text = category.title,
-            color = if (focused || selected) TvDesign.White else TvDesign.Muted,
+            color = if (focused) TvDesign.Black else if (selected) TvDesign.White else TvDesign.Muted,
             fontSize = 16.sp,
             fontWeight = if (focused || selected) FontWeight.SemiBold else FontWeight.Medium,
             modifier = Modifier.weight(1f),
@@ -589,7 +588,7 @@ private fun TvSettingsCategoryRow(
         Spacer(Modifier.width(12.dp))
         Text(
             text = "›",
-            color = if (focused || selected) TvDesign.Muted else Color.Transparent,
+            color = if (focused) TvDesign.Black else if (selected) TvDesign.Muted else Color.Transparent,
             fontSize = 20.sp,
         )
     }
@@ -1236,18 +1235,52 @@ internal fun TvSettingsRow(
 ) {
     if (entry.identityCard) {
         val logo = checkNotNull(entry.iconDrawableRes)
-        Box(
-            modifier = modifier.fillMaxWidth().padding(bottom = 10.dp)
-                .background(TvDesign.Surface, TvDesign.CardShape)
-                .border(1.dp, TvDesign.White.copy(alpha = .14f), TvDesign.CardShape)
-                .padding(vertical = 24.dp),
-            contentAlignment = Alignment.Center,
+        var focused by remember(entry.id) { mutableStateOf(false) }
+        Column(
+            modifier = modifier.fillMaxWidth()
+                .focusRequester(requester)
+                .onFocusChanged {
+                    focused = it.isFocused
+                    if (it.isFocused) onFocused()
+                }
+                .onPreviewKeyEvent { event ->
+                    when {
+                        event.isTvActivationKey() -> {
+                            if (event.type == KeyEventType.KeyUp) entry.onActivate?.invoke()
+                            true
+                        }
+                        event.type != KeyEventType.KeyDown -> false
+                        event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_LEFT -> {
+                            onLeftToSidebar()
+                            true
+                        }
+                        else -> when (event.nativeKeyEvent.keyCode) {
+                            KeyEvent.KEYCODE_DPAD_RIGHT -> true
+                            KeyEvent.KEYCODE_DPAD_UP -> first
+                            KeyEvent.KEYCODE_DPAD_DOWN -> last
+                            else -> false
+                        }
+                    }
+                }
+                .focusable(enabled = entry.enabled)
+                .padding(top = 14.dp, bottom = 22.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Image(
                 painter = painterResource(logo),
                 contentDescription = entry.title,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.width(156.dp).height(36.dp),
+            )
+            Text(
+                text = entry.value,
+                color = if (focused) TvDesign.Black else TvDesign.White,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .background(if (focused) TvDesign.White else TvDesign.SurfaceRaised, RoundedCornerShape(50))
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
             )
         }
         return
@@ -1331,7 +1364,7 @@ internal fun TvSettingsRow(
             }
             .background(
                 when {
-                    focused -> TvDesign.SurfaceRaised
+                    focused -> TvDesign.White
                     entry.actionCard -> TvDesign.Surface
                     else -> Color.Transparent
                 },
@@ -1340,8 +1373,7 @@ internal fun TvSettingsRow(
             .border(
                 1.dp,
                 when {
-                    focused && entry.accented -> TvDesign.Accent
-                    focused -> TvDesign.Focus.copy(alpha = .75f)
+                    focused -> Color.Transparent
                     entry.actionCard -> TvDesign.White.copy(alpha = .14f)
                     else -> Color.Transparent
                 },
@@ -1374,7 +1406,7 @@ internal fun TvSettingsRow(
             ) {
                 Text(
                     text = entry.badge.orEmpty(),
-                    color = TvDesign.Accent,
+                    color = if (focused) TvDesign.Black else TvDesign.Accent,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
@@ -1390,7 +1422,7 @@ internal fun TvSettingsRow(
                             color = if (entry.accented) {
                                 TvDesign.Accent.copy(alpha = if (focused) .16f else .09f)
                             } else if (focused) {
-                                TvDesign.White.copy(alpha = .10f)
+                                TvDesign.Black.copy(alpha = .08f)
                             } else {
                                 TvDesign.SurfaceRaised.copy(alpha = .62f)
                             },
@@ -1402,6 +1434,7 @@ internal fun TvSettingsRow(
                         imageVector = icon,
                         contentDescription = null,
                         tint = when {
+                            focused -> TvDesign.Black
                             !entry.enabled -> TvDesign.Dim
                             entry.accented -> TvDesign.Accent
                             else -> TvDesign.White.copy(alpha = .92f)
@@ -1420,7 +1453,7 @@ internal fun TvSettingsRow(
         ) {
             Text(
                 text = entry.title,
-                color = if (entry.enabled) TvDesign.White else TvDesign.Dim,
+                color = if (focused) TvDesign.Black else if (entry.enabled) TvDesign.White else TvDesign.Dim,
                 fontSize = 16.sp,
                 fontWeight = if (focused) FontWeight.SemiBold else FontWeight.Medium,
                 maxLines = 1,
@@ -1429,7 +1462,7 @@ internal fun TvSettingsRow(
             if (entry.subtitle.isNotBlank()) {
                 Text(
                     text = entry.subtitle,
-                    color = if (entry.enabled) TvDesign.Muted else TvDesign.Dim.copy(alpha = .65f),
+                    color = if (focused) TvDesign.Black else if (entry.enabled) TvDesign.Muted else TvDesign.Dim.copy(alpha = .65f),
                     fontSize = 12.sp,
                     lineHeight = 15.sp,
                     maxLines = 2,
@@ -1448,7 +1481,7 @@ internal fun TvSettingsRow(
                         val selected = choiceIndex == selectedIndex
                         Text(
                             text = choice,
-                            color = if (selected) TvDesign.White else TvDesign.Muted,
+                            color = if (focused) TvDesign.Black else if (selected) TvDesign.White else TvDesign.Muted,
                             fontSize = 12.sp,
                             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
                             maxLines = 1,
@@ -1473,7 +1506,7 @@ internal fun TvSettingsRow(
             entry.detail?.takeIf { it.isNotBlank() }?.let { detail ->
                 Text(
                     text = detail,
-                    color = if (entry.enabled) TvDesign.Dim else TvDesign.Dim.copy(alpha = .52f),
+                    color = if (focused) TvDesign.Black else if (entry.enabled) TvDesign.Dim else TvDesign.Dim.copy(alpha = .52f),
                     fontSize = 9.5.sp,
                     lineHeight = 13.sp,
                     maxLines = 1,
@@ -1481,7 +1514,7 @@ internal fun TvSettingsRow(
                 )
             }
             entry.operationStatus?.takeIf { it.isNotBlank() }?.let { message ->
-                Text(message, color = TvDesign.Accent, fontSize = 11.sp, lineHeight = 15.sp,
+                Text(message, color = if (focused) TvDesign.Black else TvDesign.Accent, fontSize = 11.sp, lineHeight = 15.sp,
                     maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
@@ -1493,7 +1526,7 @@ internal fun TvSettingsRow(
             verticalArrangement = Arrangement.spacedBy(5.dp),
         ) {
             if (entry.switchChecked != null) {
-                TvContentToggle(entry.switchChecked)
+                TvContentToggle(entry.switchChecked, focused = focused)
             } else if (entry.value.isNotBlank()) {
                 Text(
                     text = buildString {
@@ -1503,8 +1536,8 @@ internal fun TvSettingsRow(
                     },
                     color = when {
                         !entry.enabled -> TvDesign.Dim
+                        focused -> TvDesign.Black
                         entry.accented -> TvDesign.Accent
-                        focused -> TvDesign.White
                         else -> TvDesign.Muted
                     },
                     fontSize = 12.sp,
@@ -1516,7 +1549,7 @@ internal fun TvSettingsRow(
                             color = if (entry.accented) {
                                 TvDesign.Accent.copy(alpha = if (focused) .16f else .08f)
                             } else if (focused) {
-                                TvDesign.White.copy(alpha = .10f)
+                                TvDesign.Black.copy(alpha = .08f)
                             } else {
                                 TvDesign.White.copy(alpha = .045f)
                             },
@@ -1527,7 +1560,7 @@ internal fun TvSettingsRow(
             } else if (entry.onActivate != null && entry.rightActionLabel.isNullOrBlank()) {
                 Text(
                     text = "›",
-                    color = if (focused && entry.accented) TvDesign.Accent else if (focused) TvDesign.White else TvDesign.Dim,
+                    color = if (focused) TvDesign.Black else TvDesign.Dim,
                     fontSize = 19.sp,
                     fontWeight = FontWeight.Light,
                 )
@@ -1536,7 +1569,7 @@ internal fun TvSettingsRow(
             if (focused && !entry.rightActionLabel.isNullOrBlank()) {
                 Text(
                     text = "${entry.rightActionLabel}  ›",
-                    color = if (entry.accented) TvDesign.Accent else TvDesign.White.copy(alpha = .86f),
+                    color = TvDesign.Black,
                     fontSize = 9.5.sp,
                     fontWeight = FontWeight.Bold,
                 )

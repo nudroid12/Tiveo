@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -214,12 +213,11 @@ internal fun TiveoTopBar(
                     Text(
                         text = if (tab == "Library") "My List" else tab,
                         color = if (isSelected) Color.White else Color.White.copy(alpha = .76f),
-                        fontSize = 14.sp,
+                        fontSize = 16.sp,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         softWrap = false,
                     )
-                    Spacer(Modifier.height(6.dp))
                 }
             }
         }
@@ -240,7 +238,7 @@ internal fun TiveoTopBar(
                 label = "tabUnderlineWidth",
             )
             Canvas(Modifier.matchParentSize()) {
-                val y = selectedBounds.bottom - bounds.top - 8.dp.toPx()
+                val y = selectedBounds.bottom - bounds.top - 3.dp.toPx()
                 val halfWidth = (width - 2.dp.toPx()).coerceAtLeast(0f) / 2f
                 drawLine(
                     color = Color.White.copy(alpha = barAlpha),

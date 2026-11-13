@@ -220,17 +220,11 @@ internal fun TvAboutSettings(
 
     val entries = listOf(
         TvSettingsEntry(
-            id = "tiveo-about-logo",
+            id = "tiveo-about",
             title = "Tiveo",
             subtitle = "",
-            enabled = false,
             identityCard = true,
             iconDrawableRes = R.drawable.virio_wordmark,
-        ),
-        TvSettingsEntry(
-            id = "tiveo-about",
-            title = "Version",
-            subtitle = "",
             value = BuildConfig.VERSION_NAME,
             onActivate = {
                 if (developerOptionsEnabled) {

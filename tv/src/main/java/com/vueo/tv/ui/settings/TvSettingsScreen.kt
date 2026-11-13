@@ -378,7 +378,7 @@ internal fun TvSettingsScreen(
                     add(TvSettingsEntry(
                         id = "developer-options-enabled",
                         title = "Developer options",
-                        subtitle = "Turn off to hide this menu. Press OK 7 times on Version in About to open it again.",
+                        subtitle = "Turn off to hide this menu. Press OK 7 times on the Tiveo logo in About to open it again.",
                         onActivate = {
                             developerOptionsEnabled = false
                             openPanel(TvSettingsPage.ABOUT)
