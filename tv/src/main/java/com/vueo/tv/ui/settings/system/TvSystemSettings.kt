@@ -162,6 +162,8 @@ internal fun TvDataStorageSettings(
     TvSettingsListScreen("Data & Storage", "Backup, restore, cache, history and local data controls.", entries, onNavigate, onProfile, onBack)
 }
 
+internal const val TV_ABOUT_UPDATE_ROW_ID = "update"
+
 @Composable
 internal fun TvAboutSettings(
     onNavigate: (String) -> Unit,
@@ -244,7 +246,7 @@ internal fun TvAboutSettings(
             },
         ),
         TvSettingsEntry(
-            "update",
+            TV_ABOUT_UPDATE_ROW_ID,
             title = when {
                 checking -> "Checking for Updates…"
                 downloading -> "Downloading Update…"
@@ -263,5 +265,6 @@ internal fun TvAboutSettings(
     TvSettingsListScreen(
         "About Tiveo", "App information and updates",
         entries, onNavigate, onProfile, onBack,
+        preferredFocusId = TV_ABOUT_UPDATE_ROW_ID,
     )
 }

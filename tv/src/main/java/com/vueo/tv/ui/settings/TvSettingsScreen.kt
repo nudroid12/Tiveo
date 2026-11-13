@@ -298,6 +298,7 @@ internal fun TvSettingsScreen(
         pinDialogOpen = showPinChoice || pinStep != null,
         bottomNotice = unlockNotice.takeIf { active && visiblePage == TvSettingsPage.ABOUT },
         panelUsesSharedRows = visiblePage != TvSettingsPage.CONTENT_COLLECTIONS,
+        panelEntryFocusId = TV_ABOUT_UPDATE_ROW_ID.takeIf { visiblePage == TvSettingsPage.ABOUT },
         onCategoryOpened = { id ->
             visibleRoots.firstOrNull { it.id == id }?.let { openPanel(it.page) }
         },

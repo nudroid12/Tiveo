@@ -164,6 +164,7 @@ internal fun TvSettingsMasterDetailShell(
     pinDialogOpen: Boolean,
     bottomNotice: String?,
     panelUsesSharedRows: Boolean,
+    panelEntryFocusId: String? = null,
     onCategoryOpened: (String) -> Unit,
     onPanelBack: () -> Unit,
     topBar: TiveoTopBarState,
@@ -280,12 +281,13 @@ internal fun TvSettingsMasterDetailShell(
         return true
     }
 
-    fun focusPanel(): Boolean {
+    fun focusPanel(entering: Boolean = false): Boolean {
         if (!currentPanelFocusReady || panelKey != currentPanelKey) return false
         if (panelUsesSharedRows) {
-            val target = panelFocusTargetId(panelKey) ?: return false
+            val entryTarget = panelEntryFocusId.takeIf { entering || explicitPanelFocusPending }
+            val target = entryTarget ?: panelFocusTargetId(panelKey) ?: return false
             val first = panelFirstRowIds[panelKey]
-            val rowId = listOfNotNull(target, first).distinct().firstOrNull { id ->
+            val rowId = listOfNotNull(target, first.takeIf { entryTarget == null }).distinct().firstOrNull { id ->
                 runCatching { requesterForPanelRow(panelKey, id).requestFocus() }.getOrDefault(false)
             } ?: return false
             panelLastFocusedIds[panelKey] = rowId
@@ -504,6 +506,8 @@ internal fun TvSettingsMasterDetailShell(
                         lastPane = "panel"
                         requestDeferredPanelRestore(explicit = true)
                     }
+                } else if (panelEntryFocusId != null) {
+                    if (!focusPanel(entering = true)) focusSelectedCategory()
                 } else if (lastPane != "panel" || !focusPanel()) {
                     focusSelectedCategory()
                 }
