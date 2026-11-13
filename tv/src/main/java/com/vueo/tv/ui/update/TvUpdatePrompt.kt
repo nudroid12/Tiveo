@@ -53,7 +53,7 @@ import com.vueo.tv.ui.motion.TvMotion
 import kotlinx.coroutines.launch
 
 private val PromptShape = RoundedCornerShape(18.dp)
-private val ActionShape = RoundedCornerShape(12.dp)
+private val ActionShape = RoundedCornerShape(50)
 
 @Composable
 fun TvUpdatePrompt(
@@ -90,26 +90,26 @@ fun TvUpdatePrompt(
         ) {
             Column(
                 modifier = Modifier
-                    .widthIn(max = 480.dp)
+                    .widthIn(max = 360.dp)
                     .fillMaxWidth()
                     .clip(PromptShape)
                     .background(Color(0xFF161B25))
                     .border(1.dp, TvDesign.White.copy(alpha = .14f), PromptShape)
-                    .padding(24.dp),
+                    .padding(18.dp),
             ) {
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Image(
                         painter = painterResource(R.drawable.tiveo_tv_installer_icon),
                         contentDescription = null,
-                        modifier = Modifier.size(48.dp),
+                        modifier = Modifier.size(40.dp),
                     )
                     Column(modifier = Modifier.weight(1f)) {
                         TextLine(
                             text = "Update Tiveo",
-                            sizeSp = 25,
+                            sizeSp = 22,
                             weight = FontWeight.SemiBold,
                             color = TvDesign.White,
                             maxLines = 1,
@@ -198,7 +198,7 @@ fun TvUpdatePrompt(
                         primary = false,
                     )
 
-                    Spacer(Modifier.width(12.dp))
+                    Spacer(Modifier.width(8.dp))
 
                     TvUpdateAction(
                         label = when {
@@ -317,12 +317,12 @@ private fun TvUpdateAction(
             .background(background)
             .border(1.dp, border, ActionShape)
             .focusable(enabled)
-            .padding(horizontal = 24.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
         TextLine(
             text = label,
-            sizeSp = 15,
+            sizeSp = 13,
             weight = if (primary) FontWeight.SemiBold else FontWeight.Medium,
             color = when {
                 !enabled -> TvDesign.Dim
