@@ -1,10 +1,12 @@
 package com.vueo.tv.update
 
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.util.Log
 import androidx.core.content.FileProvider
 import com.vueo.tv.BuildConfig
 import com.vueo.shared.core.update.tiveoReleaseDisplayText
@@ -124,21 +126,45 @@ object TvUpdateManager {
             val appContext = context.applicationContext
             if (needsInstallPermission(appContext)) error("Allow Tiveo to install unknown apps first.")
             val url = release.downloadUrl ?: error("This update does not include an APK download.")
-            val target = File(File(appContext.cacheDir, "updates").apply { mkdirs() }, "Tiveo-TV-update.apk")
-            download(url, target, onProgress)
-            verifySha256(target, release.sha256)
-            val info = appContext.packageManager.getPackageArchiveInfo(target.absolutePath, 0)
-                ?: error("Downloaded file is not a valid Android APK.")
-            require(info.packageName == appContext.packageName) {
-                "Downloaded APK is for ${info.packageName}, not ${appContext.packageName}."
-            }
-            withContext(Dispatchers.Main) {
-                val uri = FileProvider.getUriForFile(appContext, "${appContext.packageName}.vueo.updates", target)
-                appContext.startActivity(
-                    Intent(Intent.ACTION_VIEW)
+            val updates = File(appContext.cacheDir, "updates")
+            check(updates.isDirectory || updates.mkdirs()) { "Unable to create the update cache." }
+            val expiry = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
+            updates.listFiles { file ->
+                file.isFile && file.name.startsWith("Tiveo-TV-update-") &&
+                    file.name.endsWith(".apk") && file.lastModified() < expiry
+            }?.forEach { it.delete() }
+
+            // Give each verified APK a distinct URI, including retries of the same release.
+            val target = File.createTempFile("Tiveo-TV-update-${release.versionCode}-", ".apk", updates)
+            var handedOff = false
+            try {
+                download(url, target, onProgress)
+                verifySha256(target, release.sha256)
+                val pm = appContext.packageManager
+                val info = pm.getPackageArchiveInfo(target.absolutePath, 0)
+                    ?: error("Downloaded file is not a valid Android APK.")
+                require(info.packageName == appContext.packageName) {
+                    "Downloaded APK is for ${info.packageName}, not ${appContext.packageName}."
+                }
+                val iconReadable = runCatching {
+                    val app = checkNotNull(info.applicationInfo)
+                    app.sourceDir = target.absolutePath
+                    app.publicSourceDir = target.absolutePath
+                    app.icon != 0 && pm.getResourcesForApplication(app).getDrawable(app.icon, null) != null
+                }.getOrDefault(false)
+                Log.i("TiveoTvUpdate", "Release ${release.versionCode}: archive icon readable=$iconReadable")
+
+                withContext(Dispatchers.Main) {
+                    val uri = FileProvider.getUriForFile(appContext, "${appContext.packageName}.vueo.updates", target)
+                    val install = Intent(Intent.ACTION_VIEW)
                         .setDataAndType(uri, "application/vnd.android.package-archive")
+                        .setClipData(ClipData.newRawUri("Tiveo TV update", uri))
                         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
+                    appContext.startActivity(install)
+                    handedOff = true
+                }
+            } finally {
+                if (!handedOff) target.delete()
             }
         }
     }
