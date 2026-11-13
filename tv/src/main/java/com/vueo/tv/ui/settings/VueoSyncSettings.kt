@@ -1,21 +1,32 @@
 package com.vueo.tv.settings
 
 import android.view.KeyEvent
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
@@ -25,6 +36,11 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.vueo.tv.ui.TvDesign
@@ -47,6 +63,7 @@ internal fun TvVueoSyncSettings(onNavigate: (String)->Unit,onProfile: ()->Unit,o
     var password by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
+    var validationAttempt by remember { mutableIntStateOf(0) }
     var confirmSignOut by remember { mutableStateOf(false) }
     fun action(block: suspend ()->String) {
         if(busy) return
@@ -67,7 +84,8 @@ internal fun TvVueoSyncSettings(onNavigate: (String)->Unit,onProfile: ()->Unit,o
     fun authenticate(register: Boolean) {
         if (busy) return
         if (email.isBlank() || password.isBlank()) {
-            message = "Enter your email and password."
+            message = ""
+            validationAttempt++
             return
         }
         action { service.signIn(email, password, register) }
@@ -76,10 +94,16 @@ internal fun TvVueoSyncSettings(onNavigate: (String)->Unit,onProfile: ()->Unit,o
     val entries = buildList {
         if (!connected) {
             add(TvSettingsEntry("email", "Email", "", formControl = { modifier, left, first ->
-                TvAccountField("Email", email, { email = it }, busy, false, modifier, left, first)
+                TvAccountField("Email", email, {
+                    email = it
+                    validationAttempt = 0
+                }, busy, false, modifier, left, first)
             }))
             add(TvSettingsEntry("password", "Password", "", formControl = { modifier, left, first ->
-                TvAccountField("Password", password, { password = it }, busy, true, modifier, left, first)
+                TvAccountField("Password", password, {
+                    password = it
+                    validationAttempt = 0
+                }, busy, true, modifier, left, first)
             }))
             add(TvSettingsEntry("sign-in", "Sign In", "", formControl = { modifier, left, _ ->
                 var focused by remember { mutableStateOf(false) }
@@ -110,7 +134,15 @@ internal fun TvVueoSyncSettings(onNavigate: (String)->Unit,onProfile: ()->Unit,o
                     )
                 }
             }))
-            if (message.isNotBlank()) add(TvSettingsEntry("message", message, "", enabled = false))
+            if (validationAttempt > 0 || message.isNotBlank()) {
+                add(TvSettingsEntry("message", "", "", enabled = false, formControl = { modifier, _, _ ->
+                    if (validationAttempt > 0) {
+                        TvAccountValidationNotice(validationAttempt, modifier)
+                    } else {
+                        Text(message, modifier = modifier, textAlign = TextAlign.Center)
+                    }
+                }))
+            }
         } else {
             add(TvSettingsEntry("status", "Account", service.email(), "Connected", enabled = false, section = "ACCOUNT"))
             add(TvSettingsEntry("message", "Account Sync", if (message.isBlank() || message == status) status else "$message\n$status", enabled = false))
@@ -132,6 +164,36 @@ internal fun TvVueoSyncSettings(onNavigate: (String)->Unit,onProfile: ()->Unit,o
         entries, onNavigate, onProfile, onBack,
         centerHeader = !connected,
     )
+}
+
+@Composable
+private fun TvAccountValidationNotice(attempt: Int, modifier: Modifier) {
+    val offset = remember { Animatable(0f) }
+    val errorColor = MaterialTheme.colorScheme.error
+
+    LaunchedEffect(attempt) {
+        offset.snapTo(0f)
+        for (position in listOf(-6f, 6f, -4f, 4f, 0f)) {
+            offset.animateTo(position, tween(durationMillis = 45, easing = LinearEasing))
+        }
+    }
+
+    Row(
+        modifier = modifier
+            .graphicsLayer { translationX = offset.value.dp.toPx() }
+            .semantics { liveRegion = LiveRegionMode.Polite },
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier.size(20.dp).border(1.5.dp, errorColor, CircleShape)
+                .clearAndSetSemantics {},
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("!", color = errorColor, style = MaterialTheme.typography.labelMedium)
+        }
+        Text("Enter your email and password.", color = errorColor, textAlign = TextAlign.Center)
+    }
 }
 
 private fun Modifier.accountActionNavigation(onLeft: () -> Unit, last: Boolean = false) =
