@@ -156,10 +156,11 @@ object TvUpdateManager {
 
                 withContext(Dispatchers.Main) {
                     val uri = FileProvider.getUriForFile(appContext, "${appContext.packageName}.vueo.updates", target)
-                    val install = Intent(Intent.ACTION_VIEW)
-                        .setDataAndType(uri, "application/vnd.android.package-archive")
-                        .setClipData(ClipData.newRawUri("Tiveo TV update", uri))
-                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                    val install = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(uri, "application/vnd.android.package-archive")
+                        setClipData(ClipData.newRawUri("Tiveo TV update", uri))
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
                     appContext.startActivity(install)
                     handedOff = true
                 }
