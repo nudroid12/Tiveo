@@ -54,6 +54,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -162,7 +163,7 @@ internal fun TvSettingsMasterDetailShell(
     panelHasBack: Boolean,
     pinDialogOpen: Boolean,
     bottomNotice: String?,
-    onCategorySelected: (String) -> Unit,
+    panelUsesSharedRows: Boolean,
     onCategoryOpened: (String) -> Unit,
     onPanelBack: () -> Unit,
     topBar: TiveoTopBarState,
@@ -191,6 +192,8 @@ internal fun TvSettingsMasterDetailShell(
     val categoryListState = rememberLazyListState()
     val categoryRequesters = remember { mutableMapOf<String, FocusRequester>() }
     categories.forEach { category -> categoryRequesters.getOrPut(category.id) { FocusRequester() } }
+    val panelStateHolder = rememberSaveableStateHolder()
+    val panelGroupRequester = remember { FocusRequester() }
     val panelRequesters = remember { mutableMapOf<String, MutableMap<String, FocusRequester>>() }
     val panelFirstRowIds = remember { mutableMapOf<String, String>() }
     val panelLastFocusedIds = remember { mutableMapOf<String, String>() }
@@ -198,7 +201,6 @@ internal fun TvSettingsMasterDetailShell(
     var lastPane by remember { mutableStateOf("category") }
     // Back's exit step belongs to user intent, not transient focus callbacks.
     var backExitPending by remember { mutableStateOf(false) }
-    var categorySelectJob by remember { mutableStateOf<Job?>(null) }
     var panelRestoreJob by remember { mutableStateOf<Job?>(null) }
     val shellScope = rememberCoroutineScope()
     val currentPanelKey by rememberUpdatedState(panelKey)
@@ -246,9 +248,9 @@ internal fun TvSettingsMasterDetailShell(
     }
 
     fun focusGlobalNav() {
-        categorySelectJob?.cancel()
         panelRestoreJob?.cancel()
         topBar.settingsPanelTransition = false
+        appliedPanelFocusToken = panelAutoFocusToken
         topBar.focus("Settings")
     }
 
@@ -256,6 +258,7 @@ internal fun TvSettingsMasterDetailShell(
         panelRestoreJob?.cancel()
         appliedPanelFocusToken = panelAutoFocusToken
         lastPane = "category"
+        topBar.settingsPanelTransition = false
         val requester = categoryRequesters.getValue(selectedCategoryId)
         if (runCatching { requester.requestFocus() }.getOrDefault(false)) {
             topBar.settingsPanelTransition = false
@@ -279,13 +282,16 @@ internal fun TvSettingsMasterDetailShell(
 
     fun focusPanel(): Boolean {
         if (!currentPanelFocusReady || panelKey != currentPanelKey) return false
-        categorySelectJob?.cancel()
-        val target = panelFocusTargetId(panelKey) ?: return false
-        val first = panelFirstRowIds[panelKey]
-        val rowId = listOfNotNull(target, first).distinct().firstOrNull { id ->
-            runCatching { requesterForPanelRow(panelKey, id).requestFocus() }.getOrDefault(false)
-        } ?: return false
-        panelLastFocusedIds[panelKey] = rowId
+        if (panelUsesSharedRows) {
+            val target = panelFocusTargetId(panelKey) ?: return false
+            val first = panelFirstRowIds[panelKey]
+            val rowId = listOfNotNull(target, first).distinct().firstOrNull { id ->
+                runCatching { requesterForPanelRow(panelKey, id).requestFocus() }.getOrDefault(false)
+            } ?: return false
+            panelLastFocusedIds[panelKey] = rowId
+        } else if (!runCatching { panelGroupRequester.requestFocus() }.getOrDefault(false)) {
+            return false
+        }
         lastPane = "panel"
         appliedPanelFocusToken = panelAutoFocusToken
         topBar.settingsPanelTransition = false
@@ -298,8 +304,9 @@ internal fun TvSettingsMasterDetailShell(
             // A panel replacement can temporarily leave the focused row detached.
             // Retry until the destination row is genuinely focusable. Do not steal
             // focus back after the user intentionally moved to categories/sidebar.
-            for (waitMs in listOf(24L, 48L, 90L, 140L)) {
-                delay(waitMs)
+            withFrameNanos { }
+            for (waitMs in listOf(0L, 32L, 64L, 120L)) {
+                if (waitMs > 0) delay(waitMs)
                 if (!currentPanelFocusReady || (!explicit && topBar.hasFocus) ||
                     lastPane != "panel" || panelKey != currentPanelKey
                 ) return@launch
@@ -323,7 +330,6 @@ internal fun TvSettingsMasterDetailShell(
         )
         when {
             backExitPending || topBar.hasFocus -> {
-                categorySelectJob?.cancel()
                 panelRestoreJob?.cancel()
                 onBack()
             }
@@ -338,13 +344,13 @@ internal fun TvSettingsMasterDetailShell(
 
     LaunchedEffect(active) {
         if (!active) {
-            categorySelectJob?.cancel()
             panelRestoreJob?.cancel()
             return@LaunchedEffect
         }
-        delay(90)
-        // Back may have already opened navigation during the entry delay.
-        if (!topBar.hasFocus) {
+        withFrameNanos { }
+        if (!topBar.hasFocus && !topBar.settingsPanelTransition &&
+            lastPane == "category" && !explicitPanelFocusPending
+        ) {
             runCatching { categoryRequesters.getValue(selectedCategoryId).requestFocus() }
         }
     }
@@ -408,36 +414,16 @@ internal fun TvSettingsMasterDetailShell(
                                 category = category,
                                 selected = category.id == selectedCategoryId,
                                 requester = categoryRequesters.getValue(category.id),
-                                onFocused = categoryFocused@{
-                                    if (!active || topBar.hasFocus) return@categoryFocused
-                                    if (explicitPanelFocusPending) return@categoryFocused
-                                    if (lastPane == "panel") {
-                                        // During panel replacement Compose may momentarily
-                                        // fall back into the category column. That is not a
-                                        // user navigation intent, so never let focus alone
-                                        // mutate the active Settings page.
+                                focusBlocked = topBar.settingsPanelTransition || explicitPanelFocusPending,
+                                onFocused = {
+                                    if (active && !topBar.hasFocus && !topBar.settingsPanelTransition &&
+                                        !explicitPanelFocusPending && lastPane == "panel"
+                                    ) {
                                         requestDeferredPanelRestore()
-                                    } else {
-                                        lastPane = "category"
-                                        categorySelectJob?.cancel()
-                                        categorySelectJob = shellScope.launch {
-                                            // Focus often traverses several categories in one
-                                            // remote key burst. Wait a fraction before composing
-                                            // a heavy destination so intermediate pages never
-                                            // block the next DPAD event.
-                                            delay(90L)
-                                            if (
-                                                active && lastPane == "category" &&
-                                                !topBar.hasFocus
-                                            ) {
-                                                onCategorySelected(category.id)
-                                            }
-                                        }
                                     }
                                 },
                                 onLeft = ::focusGlobalNav,
                                 onRight = {
-                                    categorySelectJob?.cancel()
                                     panelRestoreJob?.cancel()
                                     onCategoryOpened(category.id)
                                     true
@@ -497,10 +483,12 @@ internal fun TvSettingsMasterDetailShell(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()
-                        // Embedded panels restore their own registered row after a route change.
+                        .focusRequester(panelGroupRequester)
                         .focusGroup(),
                 ) {
-                    content()
+                    panelStateHolder.SaveableStateProvider(panelKey) {
+                        content()
+                    }
                 }
             }
         }
@@ -531,6 +519,7 @@ private fun TvSettingsCategoryRow(
     category: TvSettingsNavItem,
     selected: Boolean,
     requester: FocusRequester,
+    focusBlocked: Boolean,
     onFocused: () -> Unit,
     onLeft: () -> Unit,
     onRight: () -> Boolean,
@@ -538,11 +527,13 @@ private fun TvSettingsCategoryRow(
     onDown: () -> Boolean,
 ) {
     var focused by remember(category.id) { mutableStateOf(false) }
+    val showFocus = focused && !focusBlocked
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(44.dp)
             .focusRequester(requester)
+            .focusProperties { canFocus = !focusBlocked }
             .onFocusChanged { state ->
                 focused = state.isFocused
                 if (state.isFocused) onFocused()
@@ -566,7 +557,7 @@ private fun TvSettingsCategoryRow(
             }
             .background(
                 when {
-                    focused -> TvDesign.White
+                    showFocus -> TvDesign.White
                     selected -> TvDesign.SurfaceRaised.copy(alpha = .55f)
                     else -> Color.Transparent
                 },
@@ -578,9 +569,9 @@ private fun TvSettingsCategoryRow(
     ) {
         Text(
             text = category.title,
-            color = if (focused) TvDesign.Black else if (selected) TvDesign.White else TvDesign.Muted,
+            color = if (showFocus) TvDesign.Black else if (selected) TvDesign.White else TvDesign.Muted,
             fontSize = 16.sp,
-            fontWeight = if (focused || selected) FontWeight.SemiBold else FontWeight.Medium,
+            fontWeight = if (showFocus || selected) FontWeight.SemiBold else FontWeight.Medium,
             modifier = Modifier.weight(1f),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -588,7 +579,7 @@ private fun TvSettingsCategoryRow(
         Spacer(Modifier.width(12.dp))
         Text(
             text = "›",
-            color = if (focused) TvDesign.Black else if (selected) TvDesign.Muted else Color.Transparent,
+            color = if (showFocus) TvDesign.Black else if (selected) TvDesign.Muted else Color.Transparent,
             fontSize = 20.sp,
         )
     }
@@ -1115,7 +1106,7 @@ private fun TvSettingsEmbeddedPanel(
     LaunchedEffect(host.panelKey, focusableIds, preferredFocusId) {
         host.onFocusableRowsChanged(focusableIds, preferredFocusId)
         if (focusableIds.isNotEmpty()) {
-            delay(24)
+            withFrameNanos { }
             host.restorePanelFocus()
         }
     }
