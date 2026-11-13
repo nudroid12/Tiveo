@@ -2,9 +2,6 @@ package com.vueo.mobile.ui
 
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.runtime.saveable.rememberSaveable
 
 import com.vueo.shared.core.storage.RecommendationEngine
 import com.vueo.shared.core.diagnostics.PerformanceDiagnostics
@@ -92,7 +89,6 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Replay10
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SettingsInputComponent
 import androidx.compose.material.icons.filled.SkipNext
@@ -105,10 +101,8 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -255,7 +249,6 @@ import com.vueo.mobile.core.plugin.PluginRepositoryClient
 import com.vueo.mobile.core.model.EpisodeItem
 import com.vueo.mobile.core.model.MediaCompany
 import com.vueo.mobile.core.model.MediaItem
-import com.vueo.shared.core.media.MediaTypePolicy
 import com.vueo.mobile.core.model.MediaPerson
 import com.vueo.mobile.core.model.StreamSource
 import com.vueo.mobile.core.storage.AddonStore
@@ -341,7 +334,6 @@ internal fun HomeScreen(
         (LibraryPlaybackEntry) -> Unit,
     onOpenCollection: (String, String) -> Unit,
     onSeeAll: (CatalogRow) -> Unit,
-    onSearch: () -> Unit,
     profileAvatar: @Composable () -> Unit,
     onPlayFeatured: (MediaItem) -> Unit,
 ) {
@@ -727,30 +719,8 @@ internal fun HomeScreen(
         }
     }
 
-    var typeFilter by rememberSaveable { mutableStateOf<String?>(null) }
-    var genreFilter by rememberSaveable { mutableStateOf<String?>(null) }
-    var categoriesOpen by remember { mutableStateOf(false) }
-    val visibleRows = engine.filterVisibleRows(rows + traktRows)
-    val allFeatured = engine.filterVisible(featuredItems)
-    val genres = remember(visibleRows, allFeatured) {
-        (visibleRows.asSequence().flatMap { it.items.asSequence() } + allFeatured.asSequence())
-            .flatMap { it.genres.asSequence() }.filter { it.isNotBlank() }.distinct().sorted().toList()
-    }
-    fun matchesFilter(item: MediaItem): Boolean =
-        (typeFilter == null || MediaTypePolicy.canonical(item.type) == typeFilter) &&
-            (genreFilter == null || genreFilter in item.genres)
-
-    val filtering = typeFilter != null || genreFilter != null
-    val visibleFeaturedItems = allFeatured.filter(::matchesFilter).ifEmpty {
-        if (filtering) {
-            visibleRows.asSequence().flatMap { it.items.asSequence() }.filter(::matchesFilter)
-                .distinctBy { it.homeFeaturedKey() }.take(7).toList()
-        } else emptyList()
-    }
-    val catalogRows = if (filtering) visibleRows.mapNotNull { row ->
-        val matching = row.items.filter(::matchesFilter)
-        if (matching.isEmpty()) null else row.copy(items = matching)
-    } else visibleRows
+    val visibleFeaturedItems = engine.filterVisible(featuredItems)
+    val catalogRows = engine.filterVisibleRows(rows + traktRows)
     val savedFeatured = remember(visibleFeaturedItems, libraryVersion) {
         visibleFeaturedItems.filter(libraryStore::isWatchlisted).map { it.homeFeaturedKey() }.toSet()
     }
@@ -776,54 +746,18 @@ internal fun HomeScreen(
             ),
     ) {
         item(key = "home_header") {
-            Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp)) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Image(
-                        painterResource(R.drawable.vueo_logo_mark),
-                        contentDescription = null,
-                        modifier = Modifier.size(30.dp),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text("TIVEO", Modifier.weight(1f), color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Black)
-                    IconButton(onClick = onSearch) { Icon(Icons.Default.Search, contentDescription = "Search", tint = Color.White) }
-                    profileAvatar()
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    FilterChip(
-                        selected = typeFilter == "series",
-                        onClick = { typeFilter = if (typeFilter == "series") null else "series" },
-                        label = { Text("TV Shows") },
-                    )
-                    FilterChip(
-                        selected = typeFilter == "movie",
-                        onClick = { typeFilter = if (typeFilter == "movie") null else "movie" },
-                        label = { Text("Movies") },
-                    )
-                    Box(Modifier.weight(1f, fill = false)) {
-                        FilterChip(
-                            selected = genreFilter != null,
-                            onClick = { categoriesOpen = true },
-                            label = { Text(genreFilter ?: "Categories", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                        )
-                        DropdownMenu(expanded = categoriesOpen, onDismissRequest = { categoriesOpen = false }) {
-                            DropdownMenuItem(text = { Text("All categories") }, onClick = {
-                                genreFilter = null
-                                categoriesOpen = false
-                            })
-                            genres.forEach { genre ->
-                                DropdownMenuItem(text = { Text(genre) }, onClick = {
-                                    genreFilter = genre
-                                    categoriesOpen = false
-                                })
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if (filtering && catalogRows.isEmpty() && visibleFeaturedItems.isEmpty() && !loading && !booting && addonsPrepared) {
-            item(key = "home_no_matches") {
-                Text("No titles match these filters.", Modifier.padding(horizontal = 16.dp), color = VueoPalette.Muted)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Image(
+                    painter = painterResource(R.drawable.virio_wordmark),
+                    contentDescription = "Tiveo",
+                    modifier = Modifier.width(120.dp).height(24.dp),
+                    contentScale = ContentScale.Fit,
+                )
+                profileAvatar()
             }
         }
         if (
@@ -888,7 +822,7 @@ internal fun HomeScreen(
         }
 
         if (
-            !filtering && continueWatching.isNotEmpty()
+            continueWatching.isNotEmpty()
         ) {
             item(
                 key =
@@ -912,7 +846,7 @@ internal fun HomeScreen(
         }
 
         if (
-        !filtering && forYouItems.size >= 4
+        forYouItems.size >= 4
     ) {
         item(
             key =
@@ -938,7 +872,7 @@ internal fun HomeScreen(
     }
 
     if (
-        !filtering && becauseYouWatchedSeed !=
+        becauseYouWatchedSeed !=
             null &&
         becauseYouWatchedItems
             .size >= 4
@@ -971,7 +905,7 @@ internal fun HomeScreen(
         collectionHomeState.error?.let { error ->
             item(key = "user-collections-error") { Text(error, color = VueoPalette.Muted, modifier = Modifier.padding(16.dp)) }
         }
-        items(collectionHomeState.collections.filter { !filtering && it.enabled && it.folders.isNotEmpty() }, key = { "collection:${it.id}" }) { collection ->
+        items(collectionHomeState.collections.filter { it.enabled && it.folders.isNotEmpty() }, key = { "collection:${it.id}" }) { collection ->
             com.vueo.shared.collections.ui.CollectionHomeRow(
                 collection = collection,
                 image = { url, label, modifier -> NetworkImage(url, label, modifier) },

@@ -1007,10 +1007,6 @@ fun VueoApp(
                                     SettingsPage
                                         .CONTENT_MANAGER
                             },
-                            onSearch = {
-                                selectedCatalogRow = null
-                                selectedTab = AppTab.SEARCH
-                            },
                             profileAvatar = {
                                 IconButton(onClick = {
                                     profilePickerOpenedFromApp = true
