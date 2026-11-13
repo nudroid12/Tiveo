@@ -2122,7 +2122,8 @@ internal fun MediaDetailsScreen(
                 .statusBarsPadding()
                 .background(
                     VueoPalette.Background
-                ),
+                )
+                .navigationBarsPadding(),
         contentPadding =
             PaddingValues(
                 bottom = 32.dp
