@@ -40,6 +40,8 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
@@ -259,6 +261,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -1030,69 +1033,110 @@ private fun HomeFeaturedCarousel(
     onViewDetails: (MediaItem) -> Unit,
     onPlay: (MediaItem) -> Unit,
 ) {
+    if (items.isEmpty()) return
     val keys = remember(items) { items.map { it.homeFeaturedKey() } }
-    val index = keys.indexOf(selectedMediaKey).coerceAtLeast(0)
-    val item = items[index]
-    val saved = isSaved(item)
-    LaunchedEffect(keys, selectedMediaKey) {
-        if (selectedMediaKey !in keys) {
-            onSelectedMediaKeyChange(keys.first())
-        } else if (keys.size > 1) {
+    val pager = rememberPagerState(
+        initialPage = keys.indexOf(selectedMediaKey).coerceAtLeast(0),
+        pageCount = { items.size },
+    )
+    LaunchedEffect(keys) {
+        val selectedIndex = keys.indexOf(selectedMediaKey).coerceAtLeast(0)
+        if (pager.currentPage != selectedIndex) pager.scrollToPage(selectedIndex)
+        snapshotFlow { pager.settledPage }.collect { index ->
+            keys.getOrNull(index)?.let(onSelectedMediaKeyChange)
+        }
+    }
+    LaunchedEffect(keys, pager.isScrollInProgress, pager.settledPage) {
+        if (keys.size > 1 && !pager.isScrollInProgress) {
             delay(6500L)
-            onSelectedMediaKeyChange(keys[(index + 1) % keys.size])
+            if (!pager.isScrollInProgress) {
+                pager.scrollToPage((pager.settledPage + 1) % keys.size)
+            }
         }
     }
 
-    Box(
-        Modifier.padding(horizontal = 16.dp)
-            .fillMaxWidth().aspectRatio(.92f)
-            .clip(RoundedCornerShape(18.dp))
-            .background(VueoPalette.SurfaceStrong)
-            .clickable { onViewDetails(item) },
-    ) {
-        NetworkImage(
-            url = item.poster ?: item.background,
-            contentDescription = item.name,
-            modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop,
-            fallbackText = item.name,
-        )
-        Box(Modifier.fillMaxSize().background(
-            Brush.verticalGradient(0f to Color.Transparent, .45f to Color.Transparent,
-                .78f to Color.Black.copy(alpha = .7f), 1f to Color.Black),
-        ))
-        Column(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Text(
-                item.name, color = Color.White, fontSize = 28.sp, lineHeight = 31.sp,
-                fontWeight = FontWeight.Black, textAlign = TextAlign.Center,
-                maxLines = 2, overflow = TextOverflow.Ellipsis,
-            )
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = { onPlay(item) },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
-                    contentPadding = PaddingValues(horizontal = 8.dp),
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        HorizontalPager(state = pager, key = { keys[it] }) { index ->
+            val item = items[index]
+            val saved = isSaved(item)
+            Box(
+                Modifier.padding(horizontal = 16.dp)
+                    .fillMaxWidth().aspectRatio(.92f)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(VueoPalette.SurfaceStrong)
+                    .clickable { onViewDetails(item) },
+            ) {
+                NetworkImage(
+                    url = item.poster ?: item.background,
+                    contentDescription = item.name,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                    fallbackText = item.name,
+                )
+                Box(Modifier.fillMaxSize().background(
+                    Brush.verticalGradient(0f to Color.Transparent, .45f to Color.Transparent,
+                        .78f to Color.Black.copy(alpha = .7f), 1f to Color.Black),
+                ))
+                Column(
+                    Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Play")
+                    Text(
+                        item.name, color = Color.White, fontSize = 28.sp, lineHeight = 31.sp,
+                        fontWeight = FontWeight.Black, textAlign = TextAlign.Center,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    )
+                    val metadata = listOfNotNull(
+                        item.genres.firstOrNull { it.isNotBlank() },
+                        item.releaseInfo?.takeIf { it.isNotBlank() },
+                    ).joinToString(" • ")
+                    if (metadata.isNotEmpty()) {
+                        Text(
+                            metadata, color = Color.White.copy(alpha = .88f),
+                            fontSize = 13.sp, textAlign = TextAlign.Center,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { onPlay(item) },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
+                            contentPadding = PaddingValues(horizontal = 8.dp),
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Play")
+                        }
+                        OutlinedButton(
+                            onClick = { onToggleSaved(item) },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                            contentPadding = PaddingValues(horizontal = 8.dp),
+                        ) {
+                            Icon(if (saved) Icons.Default.Check else Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("My List", maxLines = 1)
+                        }
+                    }
                 }
-                OutlinedButton(
-                    onClick = { onToggleSaved(item) },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                    contentPadding = PaddingValues(horizontal = 8.dp),
-                ) {
-                    Icon(if (saved) Icons.Default.Check else Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("My List", maxLines = 1)
+            }
+        }
+        if (keys.size > 1) {
+            Row(
+                Modifier.padding(top = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                keys.indices.forEach { index ->
+                    val active = index == pager.currentPage
+                    Box(
+                        Modifier.width(if (active) 18.dp else 5.dp).height(5.dp)
+                            .background(Color.White.copy(alpha = if (active) 1f else .38f), RoundedCornerShape(50)),
+                    )
                 }
             }
         }
