@@ -135,7 +135,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -748,29 +747,12 @@ internal fun HomeScreen(
                 16.dp
             ),
     ) {
-        item(key = "home_header") {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Image(
-                    painter = painterResource(R.drawable.virio_wordmark),
-                    contentDescription = "Tiveo",
-                    modifier = Modifier.width(120.dp).height(24.dp),
-                    contentScale = ContentScale.Fit,
-                )
-                profileAvatar()
+        if (visibleFeaturedItems.isEmpty()) {
+            item(key = "home_header") {
+                MobileHomeHeader(profileAvatar = profileAvatar)
             }
-        }
-        if (
-            visibleFeaturedItems
-                .isNotEmpty()
-        ) {
-            item(
-                key =
-                    "home_featured"
-            ) {
+        } else {
+            item(key = "home_featured") {
                 HomeFeaturedCarousel(
                     items =
                         visibleFeaturedItems,
@@ -786,6 +768,7 @@ internal fun HomeScreen(
                     },
                     onViewDetails = onMediaClick,
                     onPlay = onPlayFeatured,
+                    profileAvatar = profileAvatar,
                 )
             }
         }
@@ -1024,6 +1007,27 @@ internal fun HomeScreen(
 }
 
 @Composable
+private fun MobileHomeHeader(
+    profileAvatar: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier.fillMaxWidth().statusBarsPadding()
+            .padding(start = 16.dp, end = 16.dp, top = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Image(
+            painter = painterResource(R.drawable.virio_wordmark),
+            contentDescription = "Tiveo",
+            modifier = Modifier.width(120.dp).height(24.dp),
+            contentScale = ContentScale.Fit,
+        )
+        profileAvatar()
+    }
+}
+
+@Composable
 private fun HomeFeaturedCarousel(
     items: List<MediaItem>,
     selectedMediaKey: String?,
@@ -1032,6 +1036,7 @@ private fun HomeFeaturedCarousel(
     onToggleSaved: (MediaItem) -> Unit,
     onViewDetails: (MediaItem) -> Unit,
     onPlay: (MediaItem) -> Unit,
+    profileAvatar: @Composable () -> Unit,
 ) {
     if (items.isEmpty()) return
     val keys = remember(items) { items.map { it.homeFeaturedKey() } }
@@ -1056,74 +1061,83 @@ private fun HomeFeaturedCarousel(
     }
 
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        HorizontalPager(state = pager, key = { keys[it] }) { index ->
-            val item = items[index]
-            val saved = isSaved(item)
-            Box(
-                Modifier.padding(horizontal = 16.dp)
-                    .fillMaxWidth().aspectRatio(.92f)
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(VueoPalette.SurfaceStrong)
-                    .clickable { onViewDetails(item) },
-            ) {
-                NetworkImage(
-                    url = item.poster ?: item.background,
-                    contentDescription = item.name,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                    fallbackText = item.name,
-                )
-                Box(Modifier.fillMaxSize().background(
-                    Brush.verticalGradient(0f to Color.Transparent, .45f to Color.Transparent,
-                        .78f to Color.Black.copy(alpha = .7f), 1f to Color.Black),
-                ))
-                Column(
-                    Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+        Box(Modifier.fillMaxWidth()) {
+            HorizontalPager(state = pager, key = { keys[it] }) { index ->
+                val item = items[index]
+                val saved = isSaved(item)
+                Box(
+                    Modifier.fillMaxWidth().aspectRatio(.92f)
+                        .background(VueoPalette.SurfaceStrong)
+                        .clickable { onViewDetails(item) },
                 ) {
-                    Text(
-                        item.name, color = Color.White, fontSize = 28.sp, lineHeight = 31.sp,
-                        fontWeight = FontWeight.Black, textAlign = TextAlign.Center,
-                        maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    NetworkImage(
+                        url = item.poster ?: item.background,
+                        contentDescription = item.name,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                        fallbackText = item.name,
                     )
-                    val metadata = listOfNotNull(
-                        item.genres.firstOrNull { it.isNotBlank() },
-                        item.releaseInfo?.takeIf { it.isNotBlank() },
-                    ).joinToString(" • ")
-                    if (metadata.isNotEmpty()) {
+                    Box(Modifier.fillMaxSize().background(
+                        Brush.verticalGradient(
+                            0f to Color.Black.copy(alpha = .60f),
+                            .28f to Color.Transparent,
+                            .45f to Color.Transparent,
+                            .78f to Color.Black.copy(alpha = .7f),
+                            1f to Color(0xFF0B0B0B),
+                        ),
+                    ))
+                    Column(
+                        Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
                         Text(
-                            metadata, color = Color.White.copy(alpha = .88f),
-                            fontSize = 13.sp, textAlign = TextAlign.Center,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            item.name, color = Color.White, fontSize = 28.sp, lineHeight = 31.sp,
+                            fontWeight = FontWeight.Black, textAlign = TextAlign.Center,
+                            maxLines = 2, overflow = TextOverflow.Ellipsis,
                         )
-                    }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = { onPlay(item) },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
-                            contentPadding = PaddingValues(horizontal = 8.dp),
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Play")
+                        val metadata = listOfNotNull(
+                            item.genres.firstOrNull { it.isNotBlank() },
+                            item.releaseInfo?.takeIf { it.isNotBlank() },
+                        ).joinToString(" • ")
+                        if (metadata.isNotEmpty()) {
+                            Text(
+                                metadata, color = Color.White.copy(alpha = .88f),
+                                fontSize = 13.sp, textAlign = TextAlign.Center,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            )
                         }
-                        OutlinedButton(
-                            onClick = { onToggleSaved(item) },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                            contentPadding = PaddingValues(horizontal = 8.dp),
-                        ) {
-                            Icon(if (saved) Icons.Default.Check else Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("My List", maxLines = 1)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = { onPlay(item) },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
+                                contentPadding = PaddingValues(horizontal = 8.dp),
+                            ) {
+                                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Play")
+                            }
+                            OutlinedButton(
+                                onClick = { onToggleSaved(item) },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                                contentPadding = PaddingValues(horizontal = 8.dp),
+                            ) {
+                                Icon(if (saved) Icons.Default.Check else Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("My List", maxLines = 1)
+                            }
                         }
                     }
                 }
             }
+            MobileHomeHeader(
+                profileAvatar = profileAvatar,
+                modifier = Modifier.align(Alignment.TopCenter),
+            )
         }
         if (keys.size > 1) {
             Row(

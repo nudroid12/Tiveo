@@ -44,6 +44,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -143,6 +145,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalConfiguration
@@ -968,13 +971,18 @@ fun VueoApp(
             }
         },
     ) { padding ->
+        val layoutDirection = LocalLayoutDirection.current
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
                     VueoPalette.Background
                 )
-                .padding(padding)
+                .padding(
+                    start = padding.calculateStartPadding(layoutDirection),
+                    end = padding.calculateEndPadding(layoutDirection),
+                    bottom = padding.calculateBottomPadding(),
+                )
                 .clipToBounds(),
         ) {
             AnimatedContent(
@@ -985,364 +993,370 @@ fun VueoApp(
                 modifier = Modifier.fillMaxSize(),
                 label = "Tiveo main navigation transition",
             ) { (currentTab, currentSettingsPage) ->
-                when (currentTab) {
-                AppTab.HOME -> key(homeStateKey) {
-                    homeUiState.SaveableStateProvider(homeStateKey) {
-                        HomeScreen(
-                            engine = engine,
-                            retainedState = homeRetainedState,
-                            activeProfileId = homeProfile.id,
-                            contentVersion = contentVersion,
-                            booting = booting,
-                            addonsPrepared = addonsPrepared,
-                            libraryStore = libraryStore,
-                            libraryVersion = libraryVersion,
-                            onLibraryChanged = {
-                                libraryVersion++
-                            },
-                            onOpenContentManager = {
-                                selectedTab =
-                                    AppTab.SETTINGS
-                                settingsPage =
-                                    SettingsPage
-                                        .CONTENT_MANAGER
-                            },
-                            profileAvatar = {
-                                IconButton(onClick = {
-                                    profilePickerOpenedFromApp = true
+                Box(
+                    Modifier.fillMaxSize()
+                        .padding(top = if (currentTab == AppTab.HOME) 0.dp else padding.calculateTopPadding())
+                        .clipToBounds(),
+                ) {
+                    when (currentTab) {
+                    AppTab.HOME -> key(homeStateKey) {
+                        homeUiState.SaveableStateProvider(homeStateKey) {
+                            HomeScreen(
+                                engine = engine,
+                                retainedState = homeRetainedState,
+                                activeProfileId = homeProfile.id,
+                                contentVersion = contentVersion,
+                                booting = booting,
+                                addonsPrepared = addonsPrepared,
+                                libraryStore = libraryStore,
+                                libraryVersion = libraryVersion,
+                                onLibraryChanged = {
+                                    libraryVersion++
+                                },
+                                onOpenContentManager = {
+                                    selectedTab =
+                                        AppTab.SETTINGS
+                                    settingsPage =
+                                        SettingsPage
+                                            .CONTENT_MANAGER
+                                },
+                                profileAvatar = {
+                                    IconButton(onClick = {
+                                        profilePickerOpenedFromApp = true
+                                        showProfilePicker = true
+                                    }) {
+                                        ProfileAvatar(profile = navigationProfile, size = 30)
+                                    }
+                                },
+                                onPlayFeatured = { item ->
+                                    mediaBackStack = emptyList()
+                                    selectedLibraryEntry = null
+                                    playFeatured = true
+                                    selectedMedia = item
+                                },
+                                onMediaClick = {
+                                    playFeatured = false
+                                    mediaBackStack =
+                                        emptyList()
+                                    selectedLibraryEntry =
+                                        null
+                                    selectedMedia = it
+                                },
+                                onPlaybackClick = {
+                                    entry ->
+                                    mediaBackStack =
+                                        emptyList()
+                                    selectedLibraryEntry =
+                                        entry
+                                    selectedMedia =
+                                        entry.media
+                                },
+                                onOpenCollection = { collection, folder ->
+                                    selectedCollectionId = collection; selectedFolderId = folder
+                                },
+                                onSeeAll = {
+                                    row ->
+                                    selectedCatalogRow =
+                                        row
+                                },
+                            )
+                        }
+                    }
+
+                    AppTab.SEARCH -> SearchScreen(
+                        engine = engine,
+                        contentVersion =
+                            contentVersion,
+                        profileVersion = profileVersion,
+                        booting = booting,
+                        query = searchQuery,
+                        searchMode = searchMode,
+                        onSearchModeChange = { searchMode = it },
+                        onQueryChange = {
+                            searchQuery = it
+                        },
+                        typeFilter =
+                            searchTypeFilter,
+                        onTypeFilterChange = {
+                            searchTypeFilter = it
+                        },
+                        sortMode =
+                            searchSortMode,
+                        onSortModeChange = {
+                            searchSortMode = it
+                        },
+                        genre = searchGenre,
+                        onGenreChange = {
+                            searchGenre = it
+                        },
+                        listState =
+                            searchListState,
+                        onMediaClick = {
+                            mediaBackStack =
+                                emptyList()
+                            selectedLibraryEntry =
+                                null
+                            selectedMedia = it
+                        },
+                    )
+
+                    AppTab.LIBRARY -> LibraryScreen(
+                        store =
+                            libraryStore,
+                        activeProfile =
+                            profileStore.activeProfile(),
+                        version =
+                            libraryVersion,
+                        onVersionChanged = {
+                            libraryVersion++
+                        },
+                        onMediaClick = {
+                            mediaBackStack =
+                                emptyList()
+                            selectedLibraryEntry =
+                                null
+                            selectedMedia = it
+                        },
+                        onPlaybackClick = {
+                            entry ->
+
+                            mediaBackStack =
+                                emptyList()
+                            selectedLibraryEntry =
+                                entry
+                            selectedMedia =
+                                entry.media
+                        },
+                    )
+
+                    AppTab.SETTINGS -> when (
+                        currentSettingsPage
+                    ) {
+                        SettingsPage.ROOT ->
+                            VueoSettingsHub(
+                                engine = engine,
+                                settingsStore = settingsStore,
+                                profileStore = profileStore,
+                                retainedState = settingsRetainedState,
+                                profileVersion = profileVersion,
+                                libraryVersion = libraryVersion,
+                                contentVersion = contentVersion,
+                                onProfiles = {
                                     showProfilePicker = true
-                                }) {
-                                    ProfileAvatar(profile = navigationProfile, size = 30)
-                                }
-                            },
-                            onPlayFeatured = { item ->
-                                mediaBackStack = emptyList()
-                                selectedLibraryEntry = null
-                                playFeatured = true
-                                selectedMedia = item
-                            },
-                            onMediaClick = {
-                                playFeatured = false
-                                mediaBackStack =
-                                    emptyList()
-                                selectedLibraryEntry =
-                                    null
-                                selectedMedia = it
-                            },
-                            onPlaybackClick = {
-                                entry ->
-                                mediaBackStack =
-                                    emptyList()
-                                selectedLibraryEntry =
-                                    entry
-                                selectedMedia =
-                                    entry.media
-                            },
-                            onOpenCollection = { collection, folder ->
-                                selectedCollectionId = collection; selectedFolderId = folder
-                            },
-                            onSeeAll = {
-                                row ->
-                                selectedCatalogRow =
-                                    row
-                            },
-                        )
+                                    profilePickerOpenedFromApp = true
+                                },
+                                onSync = { settingsPage = SettingsPage.VUEO_SYNC },
+                                onContentManager = {
+                                    settingsPage = SettingsPage.CONTENT_MANAGER
+                                },
+                                onEnhancements = {
+                                    settingsPage = SettingsPage.ENHANCEMENTS
+                                },
+                                onPlayback = {
+                                    settingsPage = SettingsPage.PLAYBACK
+                                },
+                                onSubtitles = {
+                                    settingsPage = SettingsPage.SUBTITLES
+                                },
+                                onSources = {
+                                    settingsPage = SettingsPage.SOURCES
+                                },
+                                onAppearance = {
+                                    settingsPage = SettingsPage.APPEARANCE
+                                },
+                                onDataStorage = {
+                                    settingsPage = SettingsPage.DATA_STORAGE
+                                },
+                                onAbout = {
+                                    settingsPage = SettingsPage.ABOUT
+                                },
+                            )
+
+                        SettingsPage.VUEO_SYNC -> VueoSyncSettingsScreen(onBack = { settingsPage = SettingsPage.ROOT }, returnHint = accountReturnHint)
+
+                        SettingsPage.CONTENT_MANAGER ->
+                            ContentManagerScreen(
+                                engine = engine,
+                                onBack = {
+                                    settingsPage = SettingsPage.ROOT
+                                },
+                                onAddons = {
+                                    settingsPage = SettingsPage.ADDONS
+                                },
+                                onPlugins = {
+                                    settingsPage = SettingsPage.PLUGINS
+                                },
+                                onCollections = { settingsPage = SettingsPage.COLLECTIONS },
+                                onCatalogOrder = {
+                                    settingsPage =
+                                        SettingsPage.CATALOG_ORDER
+                                },
+                            )
+
+                        SettingsPage.ADDONS ->
+                            AddonsScreen(
+                                engine = engine,
+                                store = store,
+                                contentVersion = contentVersion + addonListRevision,
+                                pendingInstallManifestUrl = pendingAddonManifestUrl,
+                                onPendingInstallConsumed = onPendingAddonManifestConsumed,
+                                onContentChanged = {
+                                    contentVersion++
+                                },
+                                onBack = {
+                                    settingsPage = SettingsPage.CONTENT_MANAGER
+                                },
+                            )
+
+                        SettingsPage.PLUGINS ->
+                            PluginsScreen(
+                                onBack = {
+                                    settingsPage = SettingsPage.CONTENT_MANAGER
+                                },
+                            )
+                        SettingsPage.COLLECTIONS ->
+                            com.vueo.shared.collections.ui.CollectionManagerScreen(
+                                engine = engine, profileId = navigationProfile.id,
+                                onBack = { settingsPage = SettingsPage.CONTENT_MANAGER },
+                                image = { url, label, modifier -> com.vueo.mobile.ui.components.NetworkImage(url, label, modifier) },
+                            )
+                        SettingsPage.CATALOG_ORDER ->
+                            CatalogOrderScreen(
+                                engine = engine,
+                                store = store,
+                                contentVersion =
+                                    contentVersion,
+                                onContentChanged = {
+                                    contentVersion++
+                                },
+                                onBack = {
+                                    settingsPage =
+                                        SettingsPage.CONTENT_MANAGER
+                                },
+                            )
+
+                        SettingsPage.ENHANCEMENTS ->
+                            EnhancementsSettingsScreen(
+                                settingsStore = settingsStore,
+                                onBack = {
+                                    settingsPage = SettingsPage.ROOT
+                                },
+                                onTrakt = {
+                                    settingsPage = SettingsPage.TRAKT
+                                },
+                                onTmdb = {
+                                    settingsPage = SettingsPage.TMDB
+                                },
+                                onMdblist = {
+                                    settingsPage = SettingsPage.MDBLIST
+                                },
+                                onGemini = {
+                                    settingsPage = SettingsPage.GEMINI
+                                },
+                            )
+
+                        SettingsPage.TRAKT ->
+                            TraktEnhancementSettingsScreen(
+                                onBack = { settingsPage = SettingsPage.ENHANCEMENTS },
+                            )
+
+                        SettingsPage.TMDB ->
+                            TmdbEnhancementSettingsScreen(
+                                settingsStore = settingsStore,
+                                onBack = {
+                                    settingsPage = SettingsPage.ENHANCEMENTS
+                                },
+                            )
+
+                        SettingsPage.MDBLIST ->
+                            MdblistEnhancementSettingsScreen(
+                                settingsStore = settingsStore,
+                                onBack = {
+                                    settingsPage = SettingsPage.ENHANCEMENTS
+                                },
+                            )
+
+
+                        SettingsPage.GEMINI ->
+                            GeminiEnhancementSettingsScreen(
+                                onBack = { settingsPage = SettingsPage.ENHANCEMENTS },
+                            )
+
+                        SettingsPage.PLAYBACK ->
+                            PlaybackSettingsScreen(
+                                settingsStore = settingsStore,
+                                onBack = {
+                                    settingsPage = SettingsPage.ROOT
+                                },
+                            )
+
+                        SettingsPage.SUBTITLES ->
+                            SubtitleSettingsScreen(
+                                settingsStore = settingsStore,
+                                onBack = {
+                                    settingsPage = SettingsPage.ROOT
+                                },
+                            )
+
+                        SettingsPage.SOURCES ->
+                            SourceSettingsScreen(
+                                settingsStore = settingsStore,
+                                onBack = {
+                                    settingsPage = SettingsPage.ROOT
+                                },
+                            )
+
+                        SettingsPage.APPEARANCE ->
+                            AppearanceSettingsScreen(
+                                settingsStore =
+                                    settingsStore,
+                                onBack = {
+                                    settingsPage = SettingsPage.ROOT
+                                },
+                            )
+
+                        SettingsPage.DATA_STORAGE ->
+                            DataStorageSettingsScreen(
+                                libraryStore = libraryStore,
+                                settingsStore = settingsStore,
+                                onLibraryChanged = {
+                                    libraryVersion++
+                                },
+                                onCatalogCacheCleared = {
+                                    contentVersion++
+                                },
+                                onPersistentDataChanged = {
+                                    store.seedDevelopmentDefaultsIfNeeded()
+                                    pluginStore.seedDevelopmentDefaultsIfNeeded()
+                                    reloadConfiguredAddons()
+
+                                    providerCodeSync.syncMissing(
+                                        pluginStore.repositories()
+                                    )
+
+                                    profileStore.ensureDefaultProfile()
+                                    VueoPalette.applyAccent(
+                                        settingsStore.appAccent()
+                                    )
+                                    selectedLibraryEntry = null
+                                    contentVersion++
+                                    libraryVersion++
+                                    profileVersion++
+                                },
+                                onBack = {
+                                    settingsPage = SettingsPage.ROOT
+                                },
+                            )
+
+                        SettingsPage.ABOUT ->
+                            AboutVueoSettingsScreen(
+                                onBack = {
+                                    settingsPage = SettingsPage.ROOT
+                                },
+                            )
                     }
                 }
-
-                AppTab.SEARCH -> SearchScreen(
-                    engine = engine,
-                    contentVersion =
-                        contentVersion,
-                    profileVersion = profileVersion,
-                    booting = booting,
-                    query = searchQuery,
-                    searchMode = searchMode,
-                    onSearchModeChange = { searchMode = it },
-                    onQueryChange = {
-                        searchQuery = it
-                    },
-                    typeFilter =
-                        searchTypeFilter,
-                    onTypeFilterChange = {
-                        searchTypeFilter = it
-                    },
-                    sortMode =
-                        searchSortMode,
-                    onSortModeChange = {
-                        searchSortMode = it
-                    },
-                    genre = searchGenre,
-                    onGenreChange = {
-                        searchGenre = it
-                    },
-                    listState =
-                        searchListState,
-                    onMediaClick = {
-                        mediaBackStack =
-                            emptyList()
-                        selectedLibraryEntry =
-                            null
-                        selectedMedia = it
-                    },
-                )
-
-                AppTab.LIBRARY -> LibraryScreen(
-                    store =
-                        libraryStore,
-                    activeProfile =
-                        profileStore.activeProfile(),
-                    version =
-                        libraryVersion,
-                    onVersionChanged = {
-                        libraryVersion++
-                    },
-                    onMediaClick = {
-                        mediaBackStack =
-                            emptyList()
-                        selectedLibraryEntry =
-                            null
-                        selectedMedia = it
-                    },
-                    onPlaybackClick = {
-                        entry ->
-
-                        mediaBackStack =
-                            emptyList()
-                        selectedLibraryEntry =
-                            entry
-                        selectedMedia =
-                            entry.media
-                    },
-                )
-
-                AppTab.SETTINGS -> when (
-                    currentSettingsPage
-                ) {
-                    SettingsPage.ROOT ->
-                        VueoSettingsHub(
-                            engine = engine,
-                            settingsStore = settingsStore,
-                            profileStore = profileStore,
-                            retainedState = settingsRetainedState,
-                            profileVersion = profileVersion,
-                            libraryVersion = libraryVersion,
-                            contentVersion = contentVersion,
-                            onProfiles = {
-                                showProfilePicker = true
-                                profilePickerOpenedFromApp = true
-                            },
-                            onSync = { settingsPage = SettingsPage.VUEO_SYNC },
-                            onContentManager = {
-                                settingsPage = SettingsPage.CONTENT_MANAGER
-                            },
-                            onEnhancements = {
-                                settingsPage = SettingsPage.ENHANCEMENTS
-                            },
-                            onPlayback = {
-                                settingsPage = SettingsPage.PLAYBACK
-                            },
-                            onSubtitles = {
-                                settingsPage = SettingsPage.SUBTITLES
-                            },
-                            onSources = {
-                                settingsPage = SettingsPage.SOURCES
-                            },
-                            onAppearance = {
-                                settingsPage = SettingsPage.APPEARANCE
-                            },
-                            onDataStorage = {
-                                settingsPage = SettingsPage.DATA_STORAGE
-                            },
-                            onAbout = {
-                                settingsPage = SettingsPage.ABOUT
-                            },
-                        )
-
-                    SettingsPage.VUEO_SYNC -> VueoSyncSettingsScreen(onBack = { settingsPage = SettingsPage.ROOT }, returnHint = accountReturnHint)
-
-                    SettingsPage.CONTENT_MANAGER ->
-                        ContentManagerScreen(
-                            engine = engine,
-                            onBack = {
-                                settingsPage = SettingsPage.ROOT
-                            },
-                            onAddons = {
-                                settingsPage = SettingsPage.ADDONS
-                            },
-                            onPlugins = {
-                                settingsPage = SettingsPage.PLUGINS
-                            },
-                            onCollections = { settingsPage = SettingsPage.COLLECTIONS },
-                            onCatalogOrder = {
-                                settingsPage =
-                                    SettingsPage.CATALOG_ORDER
-                            },
-                        )
-
-                    SettingsPage.ADDONS ->
-                        AddonsScreen(
-                            engine = engine,
-                            store = store,
-                            contentVersion = contentVersion + addonListRevision,
-                            pendingInstallManifestUrl = pendingAddonManifestUrl,
-                            onPendingInstallConsumed = onPendingAddonManifestConsumed,
-                            onContentChanged = {
-                                contentVersion++
-                            },
-                            onBack = {
-                                settingsPage = SettingsPage.CONTENT_MANAGER
-                            },
-                        )
-
-                    SettingsPage.PLUGINS ->
-                        PluginsScreen(
-                            onBack = {
-                                settingsPage = SettingsPage.CONTENT_MANAGER
-                            },
-                        )
-                    SettingsPage.COLLECTIONS ->
-                        com.vueo.shared.collections.ui.CollectionManagerScreen(
-                            engine = engine, profileId = navigationProfile.id,
-                            onBack = { settingsPage = SettingsPage.CONTENT_MANAGER },
-                            image = { url, label, modifier -> com.vueo.mobile.ui.components.NetworkImage(url, label, modifier) },
-                        )
-                    SettingsPage.CATALOG_ORDER ->
-                        CatalogOrderScreen(
-                            engine = engine,
-                            store = store,
-                            contentVersion =
-                                contentVersion,
-                            onContentChanged = {
-                                contentVersion++
-                            },
-                            onBack = {
-                                settingsPage =
-                                    SettingsPage.CONTENT_MANAGER
-                            },
-                        )
-
-                    SettingsPage.ENHANCEMENTS ->
-                        EnhancementsSettingsScreen(
-                            settingsStore = settingsStore,
-                            onBack = {
-                                settingsPage = SettingsPage.ROOT
-                            },
-                            onTrakt = {
-                                settingsPage = SettingsPage.TRAKT
-                            },
-                            onTmdb = {
-                                settingsPage = SettingsPage.TMDB
-                            },
-                            onMdblist = {
-                                settingsPage = SettingsPage.MDBLIST
-                            },
-                            onGemini = {
-                                settingsPage = SettingsPage.GEMINI
-                            },
-                        )
-
-                    SettingsPage.TRAKT ->
-                        TraktEnhancementSettingsScreen(
-                            onBack = { settingsPage = SettingsPage.ENHANCEMENTS },
-                        )
-
-                    SettingsPage.TMDB ->
-                        TmdbEnhancementSettingsScreen(
-                            settingsStore = settingsStore,
-                            onBack = {
-                                settingsPage = SettingsPage.ENHANCEMENTS
-                            },
-                        )
-
-                    SettingsPage.MDBLIST ->
-                        MdblistEnhancementSettingsScreen(
-                            settingsStore = settingsStore,
-                            onBack = {
-                                settingsPage = SettingsPage.ENHANCEMENTS
-                            },
-                        )
-
-
-                    SettingsPage.GEMINI ->
-                        GeminiEnhancementSettingsScreen(
-                            onBack = { settingsPage = SettingsPage.ENHANCEMENTS },
-                        )
-
-                    SettingsPage.PLAYBACK ->
-                        PlaybackSettingsScreen(
-                            settingsStore = settingsStore,
-                            onBack = {
-                                settingsPage = SettingsPage.ROOT
-                            },
-                        )
-
-                    SettingsPage.SUBTITLES ->
-                        SubtitleSettingsScreen(
-                            settingsStore = settingsStore,
-                            onBack = {
-                                settingsPage = SettingsPage.ROOT
-                            },
-                        )
-
-                    SettingsPage.SOURCES ->
-                        SourceSettingsScreen(
-                            settingsStore = settingsStore,
-                            onBack = {
-                                settingsPage = SettingsPage.ROOT
-                            },
-                        )
-
-                    SettingsPage.APPEARANCE ->
-                        AppearanceSettingsScreen(
-                            settingsStore =
-                                settingsStore,
-                            onBack = {
-                                settingsPage = SettingsPage.ROOT
-                            },
-                        )
-
-                    SettingsPage.DATA_STORAGE ->
-                        DataStorageSettingsScreen(
-                            libraryStore = libraryStore,
-                            settingsStore = settingsStore,
-                            onLibraryChanged = {
-                                libraryVersion++
-                            },
-                            onCatalogCacheCleared = {
-                                contentVersion++
-                            },
-                            onPersistentDataChanged = {
-                                store.seedDevelopmentDefaultsIfNeeded()
-                                pluginStore.seedDevelopmentDefaultsIfNeeded()
-                                reloadConfiguredAddons()
-
-                                providerCodeSync.syncMissing(
-                                    pluginStore.repositories()
-                                )
-
-                                profileStore.ensureDefaultProfile()
-                                VueoPalette.applyAccent(
-                                    settingsStore.appAccent()
-                                )
-                                selectedLibraryEntry = null
-                                contentVersion++
-                                libraryVersion++
-                                profileVersion++
-                            },
-                            onBack = {
-                                settingsPage = SettingsPage.ROOT
-                            },
-                        )
-
-                    SettingsPage.ABOUT ->
-                        AboutVueoSettingsScreen(
-                            onBack = {
-                                settingsPage = SettingsPage.ROOT
-                            },
-                        )
                 }
-            }
         }
         }
     }
