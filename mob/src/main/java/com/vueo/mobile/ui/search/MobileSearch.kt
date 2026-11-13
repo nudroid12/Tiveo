@@ -58,7 +58,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
@@ -870,42 +869,25 @@ internal fun SearchScreen(
                     )
                 }
 
-                LazyRow(
-                    horizontalArrangement =
-                        Arrangement.spacedBy(
-                            10.dp
-                        ),
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    item {
-                        SearchFilterButton(
-                            label =
-                                typeFilter.label,
-                            onClick = {
-                                typeDialog = true
-                            },
-                        )
-                    }
-
-                    item {
-                        SearchFilterButton(
-                            label =
-                                sortMode.label,
-                            onClick = {
-                                sortDialog = true
-                            },
-                        )
-                    }
-
-                    item {
-                        SearchFilterButton(
-                            label =
-                                genre
-                                    ?: "All Genres",
-                            onClick = {
-                                genreDialog = true
-                            },
-                        )
-                    }
+                    SearchFilterButton(
+                        label = typeFilter.label,
+                        modifier = Modifier.weight(1f),
+                        onClick = { typeDialog = true },
+                    )
+                    SearchFilterButton(
+                        label = sortMode.label,
+                        modifier = Modifier.weight(1f),
+                        onClick = { sortDialog = true },
+                    )
+                    SearchFilterButton(
+                        label = genre ?: "All Genres",
+                        modifier = Modifier.weight(1f),
+                        onClick = { genreDialog = true },
+                    )
                 }
 
                 if (
@@ -1210,11 +1192,12 @@ private fun SearchModeToggle(
 @Composable
 private fun SearchFilterButton(
     label: String,
+    modifier: Modifier,
     onClick: () -> Unit,
 ) {
     Surface(
         modifier =
-            Modifier.clickable(
+            modifier.clickable(
                 onClick = onClick
             ),
         shape =
@@ -1236,19 +1219,18 @@ private fun SearchFilterButton(
     ) {
         Row(
             modifier =
-                Modifier.padding(
-                    horizontal = 16.dp,
+                Modifier.fillMaxWidth().padding(
+                    horizontal = 8.dp,
                     vertical = 11.dp,
                 ),
             horizontalArrangement =
-                Arrangement.spacedBy(
-                    8.dp
-                ),
+                Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally),
             verticalAlignment =
                 Alignment.CenterVertically,
         ) {
             Text(
                 text = label,
+                modifier = Modifier.weight(1f, fill = false),
                 color = Color.White,
                 fontSize = 13.sp,
                 fontWeight =
