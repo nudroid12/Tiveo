@@ -875,17 +875,17 @@ internal fun SearchScreen(
                 ) {
                     SearchFilterButton(
                         label = typeFilter.label,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(.76f),
                         onClick = { typeDialog = true },
                     )
                     SearchFilterButton(
                         label = sortMode.label,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1.02f),
                         onClick = { sortDialog = true },
                     )
                     SearchFilterButton(
                         label = genre ?: "All Genres",
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1.22f),
                         onClick = { genreDialog = true },
                     )
                 }
