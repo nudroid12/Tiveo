@@ -1,11 +1,13 @@
 package com.vueo.tv.update
 
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
+import androidx.core.content.FileProvider
 import com.vueo.tv.BuildConfig
 import com.vueo.shared.core.update.tiveoReleaseDisplayText
 import kotlinx.coroutines.Dispatchers
@@ -152,15 +154,15 @@ object TvUpdateManager {
                 }.getOrDefault(false)
                 Log.i("TiveoTvUpdate", "Release ${release.versionCode}: archive icon readable=$iconReadable")
 
-                try {
-                    submitTvUpdateSession(appContext, target)
-                    handedOff = true
-                } catch (failure: Exception) {
-                    Log.w("TiveoTvUpdate", "Update session could not be submitted", failure)
-                    withContext(Dispatchers.Main) {
-                        launchTvUpdateInstaller(appContext, target)
-                        handedOff = true
+                withContext(Dispatchers.Main) {
+                    val uri = FileProvider.getUriForFile(appContext, "${appContext.packageName}.vueo.updates", target)
+                    val install = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(uri, "application/vnd.android.package-archive")
+                        setClipData(ClipData.newRawUri("Tiveo TV update", uri))
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
+                    appContext.startActivity(install)
+                    handedOff = true
                 }
             } finally {
                 if (!handedOff) target.delete()

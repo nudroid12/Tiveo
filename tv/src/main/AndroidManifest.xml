@@ -57,10 +57,6 @@
             <intent-filter><action android:name="android.media.tv.action.INITIALIZE_PROGRAMS" /></intent-filter>
         </receiver>
 
-        <receiver
-            android:name="com.vueo.tv.update.TvUpdateInstallReceiver"
-            android:exported="false" />
-
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.vueo.updates"
