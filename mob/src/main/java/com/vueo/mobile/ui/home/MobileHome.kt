@@ -1,5 +1,11 @@
 package com.vueo.mobile.ui
 
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.runtime.saveable.rememberSaveable
+
 import com.vueo.shared.core.storage.RecommendationEngine
 import com.vueo.shared.core.diagnostics.PerformanceDiagnostics
 import com.vueo.shared.core.diagnostics.PerformanceDiagnostics.Tab
@@ -335,6 +341,9 @@ internal fun HomeScreen(
         (LibraryPlaybackEntry) -> Unit,
     onOpenCollection: (String, String) -> Unit,
     onSeeAll: (CatalogRow) -> Unit,
+    onSearch: () -> Unit,
+    profileAvatar: @Composable () -> Unit,
+    onPlayFeatured: (MediaItem) -> Unit,
 ) {
     val context =
         LocalContext.current
@@ -718,7 +727,33 @@ internal fun HomeScreen(
         }
     }
 
-    val visibleFeaturedItems = engine.filterVisible(featuredItems)
+    var typeFilter by rememberSaveable { mutableStateOf<String?>(null) }
+    var genreFilter by rememberSaveable { mutableStateOf<String?>(null) }
+    var categoriesOpen by remember { mutableStateOf(false) }
+    val visibleRows = engine.filterVisibleRows(rows + traktRows)
+    val allFeatured = engine.filterVisible(featuredItems)
+    val genres = remember(visibleRows, allFeatured) {
+        (visibleRows.asSequence().flatMap { it.items.asSequence() } + allFeatured.asSequence())
+            .flatMap { it.genres.asSequence() }.filter { it.isNotBlank() }.distinct().sorted().toList()
+    }
+    fun matchesFilter(item: MediaItem): Boolean =
+        (typeFilter == null || MediaTypePolicy.canonical(item.type) == typeFilter) &&
+            (genreFilter == null || genreFilter in item.genres)
+
+    val filtering = typeFilter != null || genreFilter != null
+    val visibleFeaturedItems = allFeatured.filter(::matchesFilter).ifEmpty {
+        if (filtering) {
+            visibleRows.asSequence().flatMap { it.items.asSequence() }.filter(::matchesFilter)
+                .distinctBy { it.homeFeaturedKey() }.take(7).toList()
+        } else emptyList()
+    }
+    val catalogRows = if (filtering) visibleRows.mapNotNull { row ->
+        val matching = row.items.filter(::matchesFilter)
+        if (matching.isEmpty()) null else row.copy(items = matching)
+    } else visibleRows
+    val savedFeatured = remember(visibleFeaturedItems, libraryVersion) {
+        visibleFeaturedItems.filter(libraryStore::isWatchlisted).map { it.homeFeaturedKey() }.toSet()
+    }
     val forYouItems = if (forYouEnabled) engine.filterVisible(homeRecommendations.forYou) else emptyList()
     val becauseYouWatchedSeed = if (becauseEnabled) homeRecommendations.becauseYouWatchedSeed?.takeIf(engine::allowsContent) else null
     val becauseYouWatchedItems = if (becauseEnabled) engine.filterVisible(homeRecommendations.becauseYouWatched) else emptyList()
@@ -729,7 +764,7 @@ internal fun HomeScreen(
             Modifier
                 .fillMaxSize()
                 .background(
-                    VueoPalette.Background
+                    Color(0xFF0B0B0B)
                 ),
         contentPadding =
             PaddingValues(
@@ -740,6 +775,57 @@ internal fun HomeScreen(
                 16.dp
             ),
     ) {
+        item(key = "home_header") {
+            Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Image(
+                        painterResource(R.drawable.vueo_logo_mark),
+                        contentDescription = null,
+                        modifier = Modifier.size(30.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("TIVEO", Modifier.weight(1f), color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Black)
+                    IconButton(onClick = onSearch) { Icon(Icons.Default.Search, contentDescription = "Search", tint = Color.White) }
+                    profileAvatar()
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    FilterChip(
+                        selected = typeFilter == "series",
+                        onClick = { typeFilter = if (typeFilter == "series") null else "series" },
+                        label = { Text("TV Shows") },
+                    )
+                    FilterChip(
+                        selected = typeFilter == "movie",
+                        onClick = { typeFilter = if (typeFilter == "movie") null else "movie" },
+                        label = { Text("Movies") },
+                    )
+                    Box(Modifier.weight(1f, fill = false)) {
+                        FilterChip(
+                            selected = genreFilter != null,
+                            onClick = { categoriesOpen = true },
+                            label = { Text(genreFilter ?: "Categories", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        )
+                        DropdownMenu(expanded = categoriesOpen, onDismissRequest = { categoriesOpen = false }) {
+                            DropdownMenuItem(text = { Text("All categories") }, onClick = {
+                                genreFilter = null
+                                categoriesOpen = false
+                            })
+                            genres.forEach { genre ->
+                                DropdownMenuItem(text = { Text(genre) }, onClick = {
+                                    genreFilter = genre
+                                    categoriesOpen = false
+                                })
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (filtering && catalogRows.isEmpty() && visibleFeaturedItems.isEmpty() && !loading && !booting && addonsPrepared) {
+            item(key = "home_no_matches") {
+                Text("No titles match these filters.", Modifier.padding(horizontal = 16.dp), color = VueoPalette.Muted)
+            }
+        }
         if (
             visibleFeaturedItems
                 .isNotEmpty()
@@ -756,8 +842,13 @@ internal fun HomeScreen(
                     onSelectedMediaKeyChange = {
                         retainedState.featuredMediaKey = it
                     },
-                    onViewDetails =
-                        onMediaClick,
+                    isSaved = { it.homeFeaturedKey() in savedFeatured },
+                    onToggleSaved = {
+                        libraryStore.toggleWatchlist(it)
+                        onLibraryChanged()
+                    },
+                    onViewDetails = onMediaClick,
+                    onPlay = onPlayFeatured,
                 )
             }
         }
@@ -797,8 +888,7 @@ internal fun HomeScreen(
         }
 
         if (
-            continueWatching
-                .isNotEmpty()
+            !filtering && continueWatching.isNotEmpty()
         ) {
             item(
                 key =
@@ -822,7 +912,7 @@ internal fun HomeScreen(
         }
 
         if (
-        forYouItems.size >= 4
+        !filtering && forYouItems.size >= 4
     ) {
         item(
             key =
@@ -848,7 +938,7 @@ internal fun HomeScreen(
     }
 
     if (
-        becauseYouWatchedSeed !=
+        !filtering && becauseYouWatchedSeed !=
             null &&
         becauseYouWatchedItems
             .size >= 4
@@ -881,7 +971,7 @@ internal fun HomeScreen(
         collectionHomeState.error?.let { error ->
             item(key = "user-collections-error") { Text(error, color = VueoPalette.Muted, modifier = Modifier.padding(16.dp)) }
         }
-        items(collectionHomeState.collections.filter { it.enabled && it.folders.isNotEmpty() }, key = { "collection:${it.id}" }) { collection ->
+        items(collectionHomeState.collections.filter { !filtering && it.enabled && it.folders.isNotEmpty() }, key = { "collection:${it.id}" }) { collection ->
             com.vueo.shared.collections.ui.CollectionHomeRow(
                 collection = collection,
                 image = { url, label, modifier -> NetworkImage(url, label, modifier) },
@@ -889,7 +979,7 @@ internal fun HomeScreen(
             )
         }
             items(
-            items = engine.filterVisibleRows(rows + traktRows),
+            items = catalogRows,
             key = {
                 "catalog:${it.id}"
             },
@@ -1000,322 +1090,76 @@ internal fun HomeScreen(
 private fun HomeFeaturedCarousel(
     items: List<MediaItem>,
     selectedMediaKey: String?,
-    onSelectedMediaKeyChange:
-        (String) -> Unit,
-    onViewDetails:
-        (MediaItem) -> Unit,
+    onSelectedMediaKeyChange: (String) -> Unit,
+    isSaved: (MediaItem) -> Boolean,
+    onToggleSaved: (MediaItem) -> Unit,
+    onViewDetails: (MediaItem) -> Unit,
+    onPlay: (MediaItem) -> Unit,
 ) {
-    val itemKeys =
-        remember(items) {
-            items.map {
-                it.homeFeaturedKey()
-            }
+    val keys = remember(items) { items.map { it.homeFeaturedKey() } }
+    val index = keys.indexOf(selectedMediaKey).coerceAtLeast(0)
+    val item = items[index]
+    val saved = isSaved(item)
+    LaunchedEffect(keys, selectedMediaKey) {
+        if (selectedMediaKey !in keys) {
+            onSelectedMediaKeyChange(keys.first())
+        } else if (keys.size > 1) {
+            delay(6500L)
+            onSelectedMediaKeyChange(keys[(index + 1) % keys.size])
         }
-
-    val selectedIndex =
-        itemKeys
-            .indexOf(
-                selectedMediaKey
-            )
-            .takeIf {
-                it >= 0
-            }
-            ?: 0
-
-    val item =
-        items[
-            selectedIndex
-                .coerceIn(
-                    0,
-                    items.lastIndex
-                )
-        ]
-
-    LaunchedEffect(
-        itemKeys,
-        selectedMediaKey,
-    ) {
-        if (itemKeys.isEmpty()) {
-            return@LaunchedEffect
-        }
-
-        if (
-            selectedMediaKey !in
-                itemKeys
-        ) {
-            onSelectedMediaKeyChange(
-                itemKeys.first()
-            )
-            return@LaunchedEffect
-        }
-
-        if (
-            itemKeys.size <= 1
-        ) {
-            return@LaunchedEffect
-        }
-
-        delay(6500L)
-
-        val currentIndex =
-            itemKeys
-                .indexOf(
-                    selectedMediaKey
-                )
-                .coerceAtLeast(
-                    0
-                )
-
-        onSelectedMediaKeyChange(
-            itemKeys[
-                (
-                    currentIndex +
-                        1
-                ) % itemKeys.size
-            ]
-        )
     }
 
-    Column(
-        verticalArrangement =
-            Arrangement.spacedBy(
-                10.dp
-            ),
+    Box(
+        Modifier.padding(horizontal = 16.dp)
+            .fillMaxWidth().aspectRatio(.92f)
+            .clip(RoundedCornerShape(18.dp))
+            .background(VueoPalette.SurfaceStrong)
+            .clickable { onViewDetails(item) },
     ) {
-        Box(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(
-                        16f / 10f
-                    )
-                    .clickable {
-                        onViewDetails(
-                            item
-                        )
-                    },
+        NetworkImage(
+            url = item.poster ?: item.background,
+            contentDescription = item.name,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop,
+            fallbackText = item.name,
+        )
+        Box(Modifier.fillMaxSize().background(
+            Brush.verticalGradient(0f to Color.Transparent, .45f to Color.Transparent,
+                .78f to Color.Black.copy(alpha = .7f), 1f to Color.Black),
+        ))
+        Column(
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            NetworkImage(
-                url =
-                    item.background
-                        ?: item.poster,
-                contentDescription =
-                    item.name,
-                modifier =
-                    Modifier.fillMaxSize(),
-                contentScale =
-                    ContentScale.Crop,
-                fallbackText =
-                    item.name,
+            Text(
+                item.name, color = Color.White, fontSize = 28.sp, lineHeight = 31.sp,
+                fontWeight = FontWeight.Black, textAlign = TextAlign.Center,
+                maxLines = 2, overflow = TextOverflow.Ellipsis,
             )
-
-            Box(
-                modifier =
-                    Modifier
-                        .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                colorStops =
-                                    arrayOf(
-                                        0.00f to
-                                            Color.Black
-                                                .copy(
-                                                    alpha = .08f
-                                                ),
-                                        0.48f to
-                                            Color.Black
-                                                .copy(
-                                                    alpha = .08f
-                                                ),
-                                        0.78f to
-                                            Color.Black
-                                                .copy(
-                                                    alpha = .58f
-                                                ),
-                                        1.00f to
-                                            VueoPalette
-                                                .Background,
-                                    )
-                            )
-                        ),
-            )
-
-            Column(
-                modifier =
-                    Modifier
-                        .align(
-                            Alignment
-                                .BottomCenter
-                        )
-                        .fillMaxWidth()
-                        .padding(
-                            start = 22.dp,
-                            end = 22.dp,
-                            bottom = 20.dp,
-                        ),
-                horizontalAlignment =
-                    Alignment.CenterHorizontally,
-                verticalArrangement =
-                    Arrangement.spacedBy(
-                        9.dp
-                    ),
-            ) {
-                Text(
-                    text = item.name,
-                    modifier =
-                        Modifier.fillMaxWidth(),
-                    color =
-                        Color.White,
-                    fontSize = 28.sp,
-                    lineHeight =
-                        30.sp,
-                    fontWeight =
-                        FontWeight.Black,
-                    textAlign =
-                        TextAlign.Center,
-                    maxLines = 2,
-                    overflow =
-                        TextOverflow.Ellipsis,
-                )
-
-                val metadata =
-                    buildList {
-                        item.type
-                            .takeIf {
-                                it.isNotBlank()
-                            }
-                            ?.replaceFirstChar {
-                                it.uppercase()
-                            }
-                            ?.let(::add)
-
-                        item.genres
-                            .firstOrNull()
-                            ?.takeIf {
-                                it.isNotBlank()
-                            }
-                            ?.let(::add)
-
-                        item.releaseInfo
-                            ?.takeIf {
-                                it.isNotBlank()
-                            }
-                            ?.let(::add)
-                    }
-                        .joinToString(
-                            "  •  "
-                        )
-
-                if (
-                    metadata.isNotBlank()
-                ) {
-                    Text(
-                        text =
-                            metadata,
-                        color =
-                            Color.White
-                                .copy(
-                                    alpha = .88f
-                                ),
-                        fontSize = 12.sp,
-                        fontWeight =
-                            FontWeight.Medium,
-                        maxLines = 1,
-                        overflow =
-                            TextOverflow.Ellipsis,
-                    )
-                }
-
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
-                    onClick = {
-                        onViewDetails(
-                            item
-                        )
-                    },
-                    modifier =
-                        Modifier
-                            .width(176.dp)
-                            .height(44.dp),
-                    shape =
-                        RoundedCornerShape(
-                            22.dp
-                        ),
+                    onClick = { onPlay(item) },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
+                    contentPadding = PaddingValues(horizontal = 8.dp),
                 ) {
-                    Text(
-                        text =
-                            "View Details",
-                        fontSize = 14.sp,
-                        fontWeight =
-                            FontWeight.Bold,
-                    )
+                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Play")
                 }
-            }
-        }
-
-        if (
-            items.size > 1
-        ) {
-            Row(
-                modifier =
-                    Modifier
-                        .fillMaxWidth(),
-                horizontalArrangement =
-                    Arrangement.Center,
-                verticalAlignment =
-                    Alignment.CenterVertically,
-            ) {
-                items.indices
-                    .forEach {
-                        index ->
-                        val selected =
-                            index ==
-                                selectedIndex
-
-                        Box(
-                            modifier =
-                                Modifier
-                                    .padding(
-                                        horizontal =
-                                            3.dp
-                                    )
-                                    .clip(
-                                        RoundedCornerShape(
-                                            50
-                                        )
-                                    )
-                                    .background(
-                                        if (
-                                            selected
-                                        ) {
-                                            VueoPalette
-                                                .Accent
-                                        } else {
-                                            Color.White
-                                                .copy(
-                                                    alpha =
-                                                        .42f
-                                                )
-                                        }
-                                    )
-                                    .size(
-                                        width =
-                                            if (
-                                                selected
-                                            ) {
-                                                26.dp
-                                            } else {
-                                                7.dp
-                                            },
-                                        height =
-                                            7.dp,
-                                    )
-                                    .clickable {
-                                        onSelectedMediaKeyChange(
-                                            itemKeys[index]
-                                        )
-                                    },
-                        )
-                    }
+                OutlinedButton(
+                    onClick = { onToggleSaved(item) },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                    contentPadding = PaddingValues(horizontal = 8.dp),
+                ) {
+                    Icon(if (saved) Icons.Default.Check else Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("My List", maxLines = 1)
+                }
             }
         }
     }

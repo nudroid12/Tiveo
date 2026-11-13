@@ -328,7 +328,7 @@ private fun HomeContinueWatchingCard(
     Surface(
         modifier =
             Modifier
-                .width(232.dp)
+                .width(158.dp)
                 .aspectRatio(
                     16f / 9f
                 )

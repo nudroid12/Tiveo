@@ -296,6 +296,8 @@ internal fun MediaDetailsScreen(
     onBack: () -> Unit,
     onMediaClick: (MediaItem) -> Unit,
     onEntityClick: (MediaEntityTarget) -> Unit,
+    playOnEntry: Boolean = false,
+    onPlayRequestHandled: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -1699,6 +1701,17 @@ internal fun MediaDetailsScreen(
             preferredSource = preferredSource,
             prefetched = prefetched,
         )
+    }
+
+    LaunchedEffect(active, playOnEntry, item, selectedEpisode) {
+        if (active && playOnEntry && selectedVideoId(item, selectedEpisode) != null &&
+            !loadingStreams
+        ) {
+            onPlayRequestHandled()
+            val resume = detailsPlaybackEntry(media = item, episode = selectedEpisode, entries = detailPlaybackEntries)
+                ?.takeIf(ContinueWatchingPolicy::canResume)
+            startSourceDiscovery(targetEpisode = selectedEpisode, startPositionMs = resume?.positionMs ?: 0L)
+        }
     }
 
     val playbackSource = selectedPlaybackSource

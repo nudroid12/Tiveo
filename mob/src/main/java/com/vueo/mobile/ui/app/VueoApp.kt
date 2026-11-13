@@ -25,8 +25,6 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -538,6 +536,7 @@ fun VueoApp(
     var profilePickerOpenedFromApp by rememberSaveable {
         mutableStateOf(false)
     }
+    var playFeatured by remember { mutableStateOf(false) }
     var selectedLibraryEntry by remember {
         mutableStateOf<
             LibraryPlaybackEntry?
@@ -548,6 +547,7 @@ fun VueoApp(
     // old inputs. Keep the tree hidden until the saved owner has been checked too.
     LaunchedEffect(navigationOwner) {
         if (savedNavigationOwner != navigationOwner) {
+            playFeatured = false
             selectedTab = AppTab.HOME
             settingsPage = SettingsPage.ROOT
             searchQuery = ""
@@ -735,6 +735,7 @@ fun VueoApp(
                     settingsPage
                 )
         } else {
+            playFeatured = false
             selectedTab = AppTab.HOME
             settingsPage = SettingsPage.ROOT
         }
@@ -911,10 +912,13 @@ fun VueoApp(
                         active = selectedMedia != null,
                         initialItem = detailItem,
                         initialLibraryEntry = transitionLibraryEntry,
+                        playOnEntry = playFeatured && selectedMedia != null,
+                        onPlayRequestHandled = { playFeatured = false },
                         onLibraryChanged = {
                             libraryVersion++
                         },
                         onBack = {
+                            playFeatured = false
                             val previous =
                                 mediaBackStack.lastOrNull()
 
@@ -946,109 +950,20 @@ fun VueoApp(
             AppSurface.ROOT -> Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            Box(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .navigationBarsPadding()
-                        .padding(
-                            start = 18.dp,
-                            end = 18.dp,
-                            top = 6.dp,
-                            bottom = 10.dp,
-                        ),
-            ) {
-                Surface(
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .height(76.dp),
-                    shape =
-                        RoundedCornerShape(
-                            34.dp
-                        ),
-                    color =
-                        VueoPalette.Nav
-                            .copy(
-                                alpha = .97f
-                            ),
-                    border =
-                        androidx.compose
-                            .foundation
-                            .BorderStroke(
-                                width = 1.dp,
-                                color =
-                                    VueoPalette.Stroke
-                                        .copy(
-                                            alpha = .55f
-                                        ),
-                            ),
-                    shadowElevation =
-                        14.dp,
+            Surface(color = Color(0xFF101010)) {
+                Row(
+                    Modifier.fillMaxWidth().navigationBarsPadding().height(60.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Row(
-                        modifier =
-                            Modifier.fillMaxSize(),
-                        verticalAlignment =
-                            Alignment.CenterVertically,
-                    ) {
-                        BottomTab(
-                            tab = AppTab.HOME,
-                            selected = selectedTab,
-                            icon =
-                                Icons.Default.Home,
-                            label = "Home",
-                        ) {
-                            selectedCatalogRow =
-                                null
-                            selectedTab = it
-                            settingsPage =
-                                SettingsPage.ROOT
-                        }
-
-                        BottomTab(
-                            tab = AppTab.SEARCH,
-                            selected = selectedTab,
-                            icon =
-                                Icons.Default.Search,
-                            label = "Search",
-                        ) {
-                            selectedCatalogRow =
-                                null
-                            selectedTab = it
-                            settingsPage =
-                                SettingsPage.ROOT
-                        }
-
-                        BottomTab(
-                            tab = AppTab.LIBRARY,
-                            selected = selectedTab,
-                            icon =
-                                Icons.Default
-                                    .VideoLibrary,
-                            label = "Library",
-                        ) {
-                            selectedCatalogRow =
-                                null
-                            selectedTab = it
-                            settingsPage =
-                                SettingsPage.ROOT
-                        }
-
-                        ProfileBottomTab(
-                            tab = AppTab.SETTINGS,
-                            selected = selectedTab,
-                            profile =
-                                profileStore
-                                    .activeProfile(),
-                        ) {
-                            selectedCatalogRow =
-                                null
-                            selectedTab = it
-                            settingsPage =
-                                SettingsPage.ROOT
-                        }
+                    fun selectTab(tab: AppTab) {
+                        selectedCatalogRow = null
+                        selectedTab = tab
+                        settingsPage = SettingsPage.ROOT
                     }
+                    BottomTab(AppTab.HOME, selectedTab, Icons.Default.Home, "Home", ::selectTab)
+                    BottomTab(AppTab.SEARCH, selectedTab, Icons.Default.Search, "Search", ::selectTab)
+                    BottomTab(AppTab.LIBRARY, selectedTab, Icons.Default.VideoLibrary, "My List", ::selectTab)
+                    BottomTab(AppTab.SETTINGS, selectedTab, Icons.Default.Settings, "Settings", ::selectTab)
                 }
             }
         },
@@ -1092,7 +1007,26 @@ fun VueoApp(
                                     SettingsPage
                                         .CONTENT_MANAGER
                             },
+                            onSearch = {
+                                selectedCatalogRow = null
+                                selectedTab = AppTab.SEARCH
+                            },
+                            profileAvatar = {
+                                IconButton(onClick = {
+                                    profilePickerOpenedFromApp = true
+                                    showProfilePicker = true
+                                }) {
+                                    ProfileAvatar(profile = navigationProfile, size = 30)
+                                }
+                            },
+                            onPlayFeatured = { item ->
+                                mediaBackStack = emptyList()
+                                selectedLibraryEntry = null
+                                playFeatured = true
+                                selectedMedia = item
+                            },
                             onMediaClick = {
+                                playFeatured = false
                                 mediaBackStack =
                                     emptyList()
                                 selectedLibraryEntry =
@@ -1481,14 +1415,11 @@ private fun RowScope.BottomTab(
             NavigationBarItemDefaults
                 .colors(
                     selectedIconColor =
-                        VueoPalette.Accent,
+                        Color.White,
                     selectedTextColor =
                         Color.White,
                     indicatorColor =
-                        VueoPalette.Accent
-                            .copy(
-                                alpha = .16f
-                            ),
+                        Color.Transparent,
                     unselectedIconColor =
                         VueoPalette.Muted,
                     unselectedTextColor =
@@ -1499,107 +1430,3 @@ private fun RowScope.BottomTab(
 
 private fun VueoProfile.mobileHomeStateKey(): String =
     "home:$id:${if (isKids) "kids:$kidsMaxAge" else "standard"}"
-
-@Composable
-private fun RowScope.ProfileBottomTab(
-    tab: AppTab,
-    selected: AppTab,
-    profile: VueoProfile,
-    onSelect: (AppTab) -> Unit,
-) {
-    val profileTabSelected = selected == tab
-    val profileAvatarSize by animateDpAsState(
-        targetValue = if (profileTabSelected) 30.dp else 28.dp,
-        animationSpec = tween(
-            durationMillis = VueoMotion.QUICK_MS,
-            easing = VueoMotion.EaseOut,
-        ),
-        label = "Tiveo profile tab avatar size",
-    )
-    val profileBorderWidth by animateDpAsState(
-        targetValue = if (profileTabSelected) 2.dp else 1.dp,
-        animationSpec = tween(
-            durationMillis = VueoMotion.QUICK_MS,
-            easing = VueoMotion.EaseOut,
-        ),
-        label = "Tiveo profile tab border width",
-    )
-    val profileBorderColor by animateColorAsState(
-        targetValue =
-            if (profileTabSelected) {
-                VueoPalette.Accent
-            } else {
-                VueoPalette.Stroke
-            },
-        animationSpec = tween(
-            durationMillis = VueoMotion.QUICK_MS,
-            easing = VueoMotion.EaseOut,
-        ),
-        label = "Tiveo profile tab border color",
-    )
-
-    NavigationBarItem(
-        selected = selected == tab,
-        onClick = {
-            onSelect(tab)
-        },
-        icon = {
-            Surface(
-                modifier =
-                    Modifier.size(
-                        profileAvatarSize
-                    ),
-                shape = CircleShape,
-                color =
-                    VueoPalette.SurfaceStrong,
-                border =
-                    androidx.compose
-                        .foundation
-                        .BorderStroke(
-                            width =
-                                profileBorderWidth,
-                            color =
-                                profileBorderColor,
-                        ),
-            ) {
-                ProfileAvatar(profile = profile, size = 30)
-            }
-        },
-        label = {
-            Text(
-                text =
-                    profile.name
-                        .trim()
-                        .ifBlank { "Profile" },
-                fontSize = 11.sp,
-                fontWeight =
-                    if (
-                        selected == tab
-                    ) {
-                        FontWeight.Bold
-                    } else {
-                        FontWeight.Medium
-                    },
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        },
-        colors =
-            NavigationBarItemDefaults
-                .colors(
-                    selectedIconColor =
-                        VueoPalette.Accent,
-                    selectedTextColor =
-                        Color.White,
-                    indicatorColor =
-                        VueoPalette.Accent
-                            .copy(
-                                alpha = .12f
-                            ),
-                    unselectedIconColor =
-                        VueoPalette.Muted,
-                    unselectedTextColor =
-                        VueoPalette.Muted,
-                ),
-    )
-}
