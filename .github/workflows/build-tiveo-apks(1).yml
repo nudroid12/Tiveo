@@ -1,0 +1,666 @@
+name: Tiveo Smart Build and Publish
+
+on:
+  workflow_dispatch:
+
+  # Automatic builds start only after Apply ZIP Patch has fully completed green.
+  # This deliberately replaces push/repository_dispatch triggers so the build
+  # cannot race the patch workflow while it is still finishing.
+  workflow_run:
+    workflows:
+      - Apply ZIP Patch
+    types:
+      - completed
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  build-publish:
+    name: Smart build, verify and publish
+    # Apply ZIP Patch can start again on its own [zip-applied] commit because
+    # that commit removes the ZIP. Ignore that follow-up run so it cannot
+    # create a duplicate automatic build.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && !contains(github.event.workflow_run.head_commit.message, '[zip-applied]')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Only meaningful build jobs enter this group. A workflow_run whose job is
+    # skipped above never gets to evict the real build.
+    concurrency:
+      group: virio-dev-publish
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          # Release notes compare against each platform's last published build.
+          fetch-depth: 0
+
+      - name: Determine build scope
+        id: scope
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          APPLY_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          BUILD_MOB=false
+          BUILD_TV=false
+          REASON=""
+          CHANGED_FILE_LIST=""
+
+          force_both() {
+            BUILD_MOB=true
+            BUILD_TV=true
+          }
+
+          classify_changes() {
+            local base_sha="$1"
+            local target_sha="$2"
+
+            mapfile -t CHANGED_FILES < <(git diff --name-only "$base_sha" "$target_sha")
+            CHANGED_FILE_LIST="$(printf '%s\n' "${CHANGED_FILES[@]:-}" | sed '/^$/d')"
+
+            echo "Changed files since ${base_sha:0:7}:"
+            if [ -n "$CHANGED_FILE_LIST" ]; then
+              printf '%s\n' "$CHANGED_FILE_LIST"
+            else
+              echo "(none)"
+            fi
+
+            for path in "${CHANGED_FILES[@]:-}"; do
+              [ -n "$path" ] || continue
+
+              case "$path" in
+                mob/*)
+                  BUILD_MOB=true
+                  ;;
+                tv/*)
+                  BUILD_TV=true
+                  ;;
+                shared/*|gradle/*|buildSrc/*|build-logic/*|build.gradle.kts|settings.gradle.kts|gradle.properties|gradlew|gradlew.bat|.github/workflows/build-tiveo-apks.yml)
+                  force_both
+                  ;;
+              esac
+            done
+
+            if [ "$BUILD_MOB" = "true" ] && [ "$BUILD_TV" = "true" ]; then
+              REASON="Shared/build configuration or both apps changed"
+            elif [ "$BUILD_MOB" = "true" ]; then
+              REASON="MOB-only change"
+            elif [ "$BUILD_TV" = "true" ]; then
+              REASON="TV-only change"
+            else
+              REASON="No app-impacting files changed"
+            fi
+          }
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            force_both
+            REASON="Manual build requested"
+          elif [ "$EVENT_NAME" = "workflow_run" ]; then
+            SOURCE_SHA="$APPLY_HEAD_SHA"
+            CURRENT_HEAD="$(git rev-parse HEAD)"
+            APPLIED_SHA=""
+
+            if [ -z "$SOURCE_SHA" ]; then
+              REASON="Completed Apply ZIP Patch run did not expose a source commit; no automatic build"
+            else
+              if ! git cat-file -e "${SOURCE_SHA}^{commit}" 2>/dev/null; then
+                git fetch --no-tags --depth=1 origin "$SOURCE_SHA" || true
+              fi
+
+              if ! git cat-file -e "${SOURCE_SHA}^{commit}" 2>/dev/null; then
+                REASON="Could not resolve the Apply ZIP Patch source commit; no automatic build"
+              elif [ "$CURRENT_HEAD" = "$SOURCE_SHA" ]; then
+                REASON="Apply ZIP Patch completed successfully but produced no repository commit"
+              elif ! git merge-base --is-ancestor "$SOURCE_SHA" "$CURRENT_HEAD" 2>/dev/null; then
+                REASON="Latest main is not descended from the completed Apply ZIP Patch source commit"
+              else
+                while IFS= read -r candidate; do
+                  [ -n "$candidate" ] || continue
+                  parent="$(git rev-parse "${candidate}^" 2>/dev/null || true)"
+                  message="$(git log -1 --format=%B "$candidate")"
+                  if [ "$parent" = "$SOURCE_SHA" ] && printf '%s' "$message" | grep -Fq '[zip-applied]'; then
+                    APPLIED_SHA="$candidate"
+                    break
+                  fi
+                done < <(git rev-list --reverse "${SOURCE_SHA}..${CURRENT_HEAD}")
+
+                if [ -z "$APPLIED_SHA" ]; then
+                  REASON="Apply ZIP Patch finished green but no matching [zip-applied] commit was found"
+                else
+                  if [ "$APPLIED_SHA" != "$CURRENT_HEAD" ]; then
+                    echo "Newer commits exist on main; building the exact applied-patch commit ${APPLIED_SHA:0:7}."
+                    git checkout --detach "$APPLIED_SHA"
+                  fi
+
+                  classify_changes "$SOURCE_SHA" "$APPLIED_SHA"
+                  REASON="$REASON; auto-triggered after Apply ZIP Patch completed successfully"
+                fi
+              fi
+            fi
+          else
+            REASON="Unsupported trigger: $EVENT_NAME"
+          fi
+
+          # A selective upload deliberately leaves the unchanged app assets on
+          # the rolling release untouched. If the rolling release does not exist
+          # yet, build both once so it starts complete.
+          if { [ "$BUILD_MOB" = "true" ] || [ "$BUILD_TV" = "true" ]; } \
+            && { [ "$BUILD_MOB" != "true" ] || [ "$BUILD_TV" != "true" ]; }; then
+            if ! gh release view virio-dev >/dev/null 2>&1; then
+              force_both
+              REASON="$REASON; virio-dev release missing, bootstrapping both apps"
+            fi
+          fi
+
+          SHOULD_BUILD=false
+          if [ "$BUILD_MOB" = "true" ] || [ "$BUILD_TV" = "true" ]; then
+            SHOULD_BUILD=true
+          fi
+
+          if [ "$BUILD_MOB" = "true" ] && [ "$BUILD_TV" = "true" ]; then
+            SCOPE_LABEL="MOB + TV"
+          elif [ "$BUILD_MOB" = "true" ]; then
+            SCOPE_LABEL="MOB only"
+          elif [ "$BUILD_TV" = "true" ]; then
+            SCOPE_LABEL="TV only"
+          else
+            SCOPE_LABEL="No build"
+          fi
+
+          {
+            echo "build_mob=$BUILD_MOB"
+            echo "build_tv=$BUILD_TV"
+            echo "should_build=$SHOULD_BUILD"
+            echo "scope_label=$SCOPE_LABEL"
+            echo "reason=$REASON"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Build scope: $SCOPE_LABEL"
+          echo "Reason: $REASON"
+
+      - name: Validate signing secrets
+        if: steps.scope.outputs.should_build == 'true'
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.VIRIO_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.VIRIO_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$KEYSTORE_B64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "::error::Missing VIRIO_KEYSTORE_BASE64 or VIRIO_KEYSTORE_PASSWORD."
+            exit 1
+          fi
+
+      - name: Set up JDK 17
+        if: steps.scope.outputs.should_build == 'true'
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Verify Gradle wrapper
+        if: steps.scope.outputs.should_build == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f ./gradlew || {
+            echo "::error::gradlew is missing."
+            exit 1
+          }
+
+          test -f ./gradle/wrapper/gradle-wrapper.properties || {
+            echo "::error::Gradle wrapper properties are missing."
+            exit 1
+          }
+
+          chmod +x ./gradlew
+
+      # setup-gradle provides Gradle User Home/build-cache reuse between runs.
+      - name: Set up Gradle cache
+        if: steps.scope.outputs.should_build == 'true'
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Ensure Android SDK 36 tools
+        if: steps.scope.outputs.should_build == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -z "$SDK_ROOT" ]; then
+            echo "::error::ANDROID_HOME/ANDROID_SDK_ROOT is not configured."
+            exit 1
+          fi
+
+          MISSING=()
+          [ -d "$SDK_ROOT/platforms/android-36" ] || MISSING+=("platforms;android-36")
+          [ -x "$SDK_ROOT/build-tools/36.0.0/apksigner" ] || MISSING+=("build-tools;36.0.0")
+          [ -x "$SDK_ROOT/platform-tools/adb" ] || MISSING+=("platform-tools")
+
+          if [ "${#MISSING[@]}" -eq 0 ]; then
+            echo "Android SDK 36 tools already present on runner; skipping sdkmanager download."
+            exit 0
+          fi
+
+          SDKMANAGER="$(command -v sdkmanager || true)"
+          if [ -z "$SDKMANAGER" ] && [ -x "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          fi
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "::error::sdkmanager was not found."
+            exit 1
+          fi
+
+          yes 2>/dev/null | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" --channel=0 "${MISSING[@]}"
+
+      - name: Prepare signed release metadata
+        if: steps.scope.outputs.should_build == 'true'
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.VIRIO_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.VIRIO_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          VERSION_CODE="$(date -u +%s)"
+          if [ "$VERSION_CODE" -ge 2100000000 ]; then
+            echo "::error::Generated Android versionCode is too large."
+            exit 1
+          fi
+
+          readarray -t BASE_VERSIONS < <(
+            python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          def version(path: str, fallback: str) -> str:
+              text = Path(path).read_text(encoding="utf-8")
+              match = re.search(r'versionName\s*=.*?\?:\s*"([^"]+)"', text)
+              if match:
+                  return match.group(1).strip()
+              match = re.search(r'versionName\s*=\s*"([^"]+)"', text)
+              return match.group(1).strip() if match else fallback
+
+          print(version("mob/build.gradle.kts", "0.0.0"))
+          print(version("tv/build.gradle.kts", "0.0.0"))
+          PY
+          )
+
+          MOB_VERSION_NAME="${BASE_VERSIONS[0]}-dev.${VERSION_CODE}"
+          TV_VERSION_NAME="${BASE_VERSIONS[1]}-dev.${VERSION_CODE}"
+
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/virio-dev-signing.jks"
+          test -s "$RUNNER_TEMP/virio-dev-signing.jks" || {
+            echo "::error::Decoded signing keystore is empty."
+            exit 1
+          }
+
+          {
+            echo "VUEO_VERSION_CODE=$VERSION_CODE"
+            echo "VUEO_VERSION_NAME=$MOB_VERSION_NAME"
+            echo "VUEO_TV_VERSION_NAME=$TV_VERSION_NAME"
+            echo "VUEO_KEYSTORE_PATH=$RUNNER_TEMP/virio-dev-signing.jks"
+            echo "VUEO_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+          } >> "$GITHUB_ENV"
+
+          if [ "${{ steps.scope.outputs.build_mob }}" = "true" ]; then
+            echo "MOB: $MOB_VERSION_NAME ($VERSION_CODE)"
+          fi
+          if [ "${{ steps.scope.outputs.build_tv }}" = "true" ]; then
+            echo "TV:     $TV_VERSION_NAME ($VERSION_CODE)"
+          fi
+
+      - name: Build selected release APKs once
+        if: steps.scope.outputs.should_build == 'true'
+        shell: bash
+        env:
+          BUILD_MOB: ${{ steps.scope.outputs.build_mob }}
+          BUILD_TV: ${{ steps.scope.outputs.build_tv }}
+        run: |
+          set -euo pipefail
+
+          TASKS=()
+          [ "$BUILD_MOB" = "true" ] && TASKS+=(":mob:assembleRelease")
+          [ "$BUILD_TV" = "true" ] && TASKS+=(":tv:assembleRelease")
+
+          if [ "${#TASKS[@]}" -eq 0 ]; then
+            echo "No Gradle tasks selected."
+            exit 0
+          fi
+
+          echo "Gradle tasks: ${TASKS[*]}"
+
+          # Still one Gradle invocation when both apps are required, allowing
+          # :shared:core to be compiled once and reused by both dependency graphs.
+          ./gradlew \
+            "${TASKS[@]}" \
+            --build-cache \
+            --parallel \
+            --stacktrace
+
+      - name: Locate and verify signed APKs
+        if: steps.scope.outputs.should_build == 'true'
+        shell: bash
+        env:
+          BUILD_MOB: ${{ steps.scope.outputs.build_mob }}
+          BUILD_TV: ${{ steps.scope.outputs.build_tv }}
+        run: |
+          set -euo pipefail
+
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          APKSIGNER="$SDK_ROOT/build-tools/36.0.0/apksigner"
+          AAPT="$SDK_ROOT/build-tools/36.0.0/aapt"
+
+          test -x "$APKSIGNER" || {
+            echo "::error::apksigner 36.0.0 was not found."
+            exit 1
+          }
+          test -x "$AAPT" || {
+            echo "::error::aapt 36.0.0 was not found."
+            exit 1
+          }
+
+          if [ "$BUILD_MOB" = "true" ]; then
+            MOB_APK="$(find mob/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print -quit)"
+            test -n "$MOB_APK" && test -s "$MOB_APK" || {
+              echo "::error::MOB release APK was not generated."
+              exit 1
+            }
+
+            "$APKSIGNER" verify --verbose --print-certs "$MOB_APK"
+            MOB_PACKAGE="$(
+              "$AAPT" dump badging "$MOB_APK" \
+                | sed -n "s/^package: name='\([^']*\)'.*/\1/p" \
+                | head -n 1
+            )"
+            [ "$MOB_PACKAGE" = "com.virio.mob" ] || {
+              echo "::error::Wrong MOB package: $MOB_PACKAGE"
+              exit 1
+            }
+
+            echo "MOB_APK=$MOB_APK" >> "$GITHUB_ENV"
+            echo "MOB package: $MOB_PACKAGE"
+          fi
+
+          if [ "$BUILD_TV" = "true" ]; then
+            TV_APK="$(find tv/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print -quit)"
+            test -n "$TV_APK" && test -s "$TV_APK" || {
+              echo "::error::TV release APK was not generated."
+              exit 1
+            }
+
+            "$APKSIGNER" verify --verbose --print-certs "$TV_APK"
+            TV_PACKAGE="$(
+              "$AAPT" dump badging "$TV_APK" \
+                | sed -n "s/^package: name='\([^']*\)'.*/\1/p" \
+                | head -n 1
+            )"
+            [ "$TV_PACKAGE" = "com.virio.tv" ] || {
+              echo "::error::Wrong TV package: $TV_PACKAGE"
+              exit 1
+            }
+
+            echo "TV_APK=$TV_APK" >> "$GITHUB_ENV"
+            echo "TV package: $TV_PACKAGE"
+          fi
+
+      - name: Prepare rolling release files
+        if: steps.scope.outputs.should_build == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLY_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          BUILD_MOB: ${{ steps.scope.outputs.build_mob }}
+          BUILD_TV: ${{ steps.scope.outputs.build_tv }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+
+          MOB_SHA256=""
+          TV_SHA256=""
+
+          if [ "$BUILD_MOB" = "true" ]; then
+            cp "$MOB_APK" dist/Tiveo-MOB-dev.apk
+            MOB_SHA256="$(sha256sum dist/Tiveo-MOB-dev.apk | awk '{print $1}')"
+            sha256sum dist/Tiveo-MOB-dev.apk > dist/Tiveo-MOB-dev.apk.sha256
+          fi
+
+          if [ "$BUILD_TV" = "true" ]; then
+            cp "$TV_APK" dist/Tiveo-TV-dev.apk
+            TV_SHA256="$(sha256sum dist/Tiveo-TV-dev.apk | awk '{print $1}')"
+            sha256sum dist/Tiveo-TV-dev.apk > dist/Tiveo-TV-dev.apk.sha256
+          fi
+
+          PUBLISHED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          COMMIT_SHA="$(git rev-parse HEAD)"
+
+          export BUILD_MOB BUILD_TV MOB_SHA256 TV_SHA256 PUBLISHED_AT COMMIT_SHA
+
+          python3 <<'PY'
+          from pathlib import Path
+          import json
+          import os
+          import re
+          import subprocess
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          code = int(os.environ["VUEO_VERSION_CODE"])
+          commit = os.environ["COMMIT_SHA"]
+          published = os.environ["PUBLISHED_AT"]
+
+          def git(*args):
+              return subprocess.run(["git", *args], capture_output=True, text=True)
+
+          def resolve_commit(value):
+              if isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{7,40}", value):
+                  result = git("rev-parse", "--verify", value + "^{commit}")
+                  if result.returncode == 0:
+                      return result.stdout.strip()
+              return None
+
+          def previous_commit(feed_name):
+              result = subprocess.run(
+                  ["gh", "release", "download", "virio-dev", "--repo", repo,
+                   "--pattern", feed_name, "--output", "-"],
+                  capture_output=True, text=True,
+              )
+              if result.returncode != 0:
+                  print(f"Previous {feed_name} unavailable. Using the build's source range.")
+                  return None
+              try:
+                  feed = json.loads(result.stdout)
+              except ValueError:
+                  return None
+              if not isinstance(feed, dict):
+                  return None
+              previous = resolve_commit(feed.get("commitSha"))
+              if previous:
+                  return previous
+              # Existing feeds used a short commit hash in the old changelog.
+              notes = feed.get("changelog")
+              for note in notes if isinstance(notes, list) else []:
+                  if isinstance(note, str) and note.startswith("Commit "):
+                      previous = resolve_commit(note.removeprefix("Commit "))
+                      if previous:
+                          return previous
+              return None
+
+          def release_notes(platform, feed_name):
+              base = previous_commit(feed_name)
+              if not base:
+                  source = resolve_commit(os.environ.get("APPLY_HEAD_SHA"))
+                  if source and git("merge-base", "--is-ancestor", source, commit).returncode == 0:
+                      base = source
+                  else:
+                      parent = git("rev-parse", "--verify", commit + "^")
+                      base = parent.stdout.strip() if parent.returncode == 0 else None
+              if not base:
+                  return []
+              diff = git("diff", "--name-only", "--no-renames", "-z", base, commit)
+              if diff.returncode:
+                  print(f"Could not compare changes for {feed_name}.")
+                  return []
+              paths = diff.stdout.split("\0")
+              platform_code = f"{platform}/src/main/"
+              app_paths = [path for path in paths if path.startswith(platform_code)]
+              rules = (
+                  (("/ui/settings/system/TvSystemSettings.kt",), "Updated system settings and the About screen."),
+                  (("/ui/home/", "/ui/sidebar/"), "Updated the Home screen and navigation."),
+                  (("/ui/search/",), "Updated Search."),
+                  (("/ui/player/", "/core/player/"), "Updated playback controls."),
+                  (("/ui/detail/",), "Updated the title details screen."),
+                  (("/ui/library/",), "Updated My List."),
+                  (("/ui/profile/",), "Updated profiles."),
+                  (("/ui/update/", "/core/update/"), "Updated the in-app updater."),
+                  (("/ui/settings/",), "Updated Settings."),
+                  (("/ui/content/", "/ui/source/"), "Updated content and source selection."),
+              )
+              matched_notes = {
+                  next((note for patterns, note in rules if any(pattern in path for pattern in patterns)), None)
+                  for path in app_paths
+              }
+              notes = [note for _, note in rules if note in matched_notes]
+              if any(path.startswith("shared/") and "/src/main/" in path for path in paths):
+                  notes.append("Updated shared app components.")
+              if not notes and app_paths:
+                  notes.append("Updated app components.")
+              return notes[:3]
+
+          if os.environ["BUILD_MOB"] == "true":
+              mob = {
+                  "schemaVersion": 1,
+                  "versionCode": code,
+                  "versionName": os.environ["VUEO_VERSION_NAME"],
+                  "title": "Tiveo MOB " + os.environ["VUEO_VERSION_NAME"],
+                  "commitSha": commit,
+                  "changelog": release_notes("mob", "update.json"),
+                  "downloadUrl": f"https://github.com/{repo}/releases/download/virio-dev/Tiveo-MOB-dev.apk",
+                  "sha256": os.environ["MOB_SHA256"],
+                  "publishedAt": published,
+              }
+              Path("dist/update.json").write_text(
+                  json.dumps(mob, indent=2) + "\n",
+                  encoding="utf-8",
+              )
+
+          if os.environ["BUILD_TV"] == "true":
+              tv = {
+                  "schemaVersion": 1,
+                  "versionCode": code,
+                  "versionName": os.environ["VUEO_TV_VERSION_NAME"],
+                  "title": "Tiveo TV " + os.environ["VUEO_TV_VERSION_NAME"],
+                  "commitSha": commit,
+                  "changelog": release_notes("tv", "tv-update.json"),
+                  "downloadUrl": f"https://github.com/{repo}/releases/download/virio-dev/Tiveo-TV-dev.apk",
+                  "sha256": os.environ["TV_SHA256"],
+                  "publishedAt": published,
+              }
+              Path("dist/tv-update.json").write_text(
+                  json.dumps(tv, indent=2) + "\n",
+                  encoding="utf-8",
+              )
+          PY
+
+          echo "Release payload for this run:"
+          ls -lh dist/
+
+      - name: Publish rolling Tiveo Dev release
+        if: steps.scope.outputs.should_build == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_MOB: ${{ steps.scope.outputs.build_mob }}
+          BUILD_TV: ${{ steps.scope.outputs.build_tv }}
+        run: |
+          set -euo pipefail
+
+          if ! gh release view virio-dev >/dev/null 2>&1; then
+            gh release create virio-dev \
+              --target "$(git rev-parse HEAD)" \
+              --title "Tiveo Dev" \
+              --prerelease \
+              --notes "Rolling development release. Only successful signed builds are published."
+          fi
+
+          ASSETS=()
+          FEEDS=()
+          OLD_ASSETS=()
+
+          if [ "$BUILD_MOB" = "true" ]; then
+            ASSETS+=(
+              "dist/Tiveo-MOB-dev.apk"
+              "dist/Tiveo-MOB-dev.apk.sha256"
+            )
+            FEEDS+=("dist/update.json")
+            OLD_ASSETS+=("Virio-MOB-dev.apk" "Virio-MOB-dev.apk.sha256")
+          fi
+
+          if [ "$BUILD_TV" = "true" ]; then
+            ASSETS+=(
+              "dist/Tiveo-TV-dev.apk"
+              "dist/Tiveo-TV-dev.apk.sha256"
+            )
+            FEEDS+=("dist/tv-update.json")
+            OLD_ASSETS+=("Virio-TV-dev.apk" "Virio-TV-dev.apk.sha256")
+          fi
+
+          # Keep the existing tag and feed names for installed clients.
+          # Publish each APK before the feed starts pointing at it.
+          gh release upload virio-dev "${ASSETS[@]}" --clobber
+          gh release upload virio-dev "${FEEDS[@]}" --clobber
+          gh release edit virio-dev --title "Tiveo Dev"
+
+          # Remove the old names only for apps whose new feeds are published.
+          EXISTING_ASSETS="$(gh release view virio-dev --json assets --jq '.assets[].name')"
+          for asset in "${OLD_ASSETS[@]}"; do
+            if grep -Fxq -- "$asset" <<< "$EXISTING_ASSETS"; then
+              gh release delete-asset virio-dev "$asset" --yes
+            fi
+          done
+
+      - name: Build summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Tiveo Smart Build"
+            echo
+            echo "- Commit: \`$(git rev-parse HEAD 2>/dev/null || printf '%s' "$GITHUB_SHA")\`"
+            echo "- Scope: \`${{ steps.scope.outputs.scope_label || 'unknown' }}\`"
+            echo "- Reason: ${{ steps.scope.outputs.reason || 'scope step did not finish' }}"
+            echo "- Build mode: Release only"
+            echo "- Gradle invocations: $([ '${{ steps.scope.outputs.should_build }}' = 'true' ] && echo '1' || echo '0')"
+            echo "- Shared Core: compiled only when selected by the dependency graph"
+            echo "- Unchanged app release assets: preserved"
+            echo "- Actions APK artifacts: disabled"
+            echo "- Distribution: rolling \`virio-dev\` GitHub Release"
+
+            if [ -f dist/Tiveo-MOB-dev.apk ]; then
+              echo "- MOB: \`${VUEO_VERSION_NAME:-built}\`"
+              echo "- MOB size: \`$(du -h dist/Tiveo-MOB-dev.apk | cut -f1)\`"
+            else
+              echo "- MOB: not rebuilt"
+            fi
+
+            if [ -f dist/Tiveo-TV-dev.apk ]; then
+              echo "- TV: \`${VUEO_TV_VERSION_NAME:-built}\`"
+              echo "- TV size: \`$(du -h dist/Tiveo-TV-dev.apk | cut -f1)\`"
+            else
+              echo "- TV: not rebuilt"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          
