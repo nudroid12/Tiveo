@@ -29,7 +29,7 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="virio" android:host="account" android:path="/confirmed" />
+                <data android:scheme="tiveo" android:host="account" android:path="/confirmed" />
             </intent-filter>
 
             <intent-filter>

@@ -16,7 +16,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 object TvWatchNextDeepLink {
-    private const val SCHEME = "vueo"
+    private const val SCHEME = "tiveo"
     private const val HOST = "watch-next"
     private const val ENTRY_PARAM = "entry"
 

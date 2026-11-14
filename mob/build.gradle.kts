@@ -19,7 +19,7 @@ val vueoKeystorePassword =
 val virioUpdateManifestUrl = providers.environmentVariable("GITHUB_REPOSITORY")
     .map { repository ->
         if (repository.matches(Regex("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"))) {
-            "https://github.com/$repository/releases/download/virio-dev/update.json"
+            "https://github.com/$repository/releases/download/tiveo-dev/update.json"
         } else {
             ""
         }
@@ -32,7 +32,7 @@ android {
 
     defaultConfig {
         buildConfigField("String", "UPDATE_MANIFEST_URL", "\"$virioUpdateManifestUrl\"")
-        applicationId = "com.virio.mob"
+        applicationId = "com.tiveo.mobile"
         minSdk = 23
         targetSdk = 36
         versionCode = vueoCiVersionCode ?: 23

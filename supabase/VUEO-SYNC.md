@@ -16,7 +16,7 @@ Validation: static source/delimiter checks, SQL access-control review, patch pat
 
 ## Email confirmation redirect
 
-In Supabase → Authentication → URL Configuration → Redirect URLs, add exactly `vueo://account/confirmed` and save. Keep email confirmation enabled. The updated signup request sends this explicit redirect URL. Confirming a new email link on a phone with the updated mobile app installed opens Account; sign in normally there. Callback tokens are not imported or logged. Existing confirmation emails keep their old redirect, so this applies to new emails. TV signups can also be confirmed on a phone with the mobile app; return to the TV and sign in normally. No new SQL migration is required for these app changes.
+In Supabase → Authentication → URL Configuration → Redirect URLs, add `tiveo://account/confirmed` alongside the existing VUEO redirect and save. Keep email confirmation enabled. The updated signup request sends this explicit redirect URL. Confirming a new email link on a phone with the updated mobile app installed opens Account; sign in normally there. Callback tokens are not imported or logged. Existing confirmation emails keep their old redirect, so this applies to new emails. TV signups can also be confirmed on a phone with the mobile app; return to the TV and sign in normally. No new SQL migration is required for these app changes.
 
 ## Category repositories and compact library records
 

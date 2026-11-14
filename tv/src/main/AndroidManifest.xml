@@ -41,14 +41,14 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data
-                    android:scheme="virio"
+                    android:scheme="tiveo"
                     android:host="watch-next" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="virio" android:host="channel" />
+                <data android:scheme="tiveo" android:host="channel" />
             </intent-filter>
         </activity>
 

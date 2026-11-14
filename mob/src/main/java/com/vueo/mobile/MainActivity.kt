@@ -19,7 +19,7 @@ class MainActivity : ComponentActivity() {
     private fun captureAddonIntent(sourceIntent: Intent?) {
         if (sourceIntent?.action != Intent.ACTION_VIEW) return
         val uri = sourceIntent.data
-        if (uri?.scheme == "virio" && uri.host == "account" && uri.path == "/confirmed") {
+        if (uri?.scheme == "tiveo" && uri.host == "account" && uri.path == "/confirmed") {
             val fragment = uri.fragment.orEmpty()
             val failed = uri.getQueryParameter("error") != null || fragment.startsWith("error=") || fragment.contains("&error=")
             pendingAccountReturn.value = if (failed) "The email link could not be confirmed. Request a fresh email link." else

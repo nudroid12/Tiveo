@@ -31,11 +31,11 @@ object TvHomeChannels {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lock = Any()
     private const val PREFIX = "vueo.home.v1."
-    fun accepts(uri: Uri?): Boolean = uri?.scheme == "virio" && uri.host == "channel"
+    fun accepts(uri: Uri?): Boolean = uri?.scheme == "tiveo" && uri.host == "channel"
     private fun key(item: MediaItem) = "${item.type}:${item.id}"
     private fun prefs(context: Context) = context.getSharedPreferences("vueo_settings", Context.MODE_PRIVATE)
     private fun uri(profile: String, kind: String, media: MediaItem? = null): Uri = Uri.Builder()
-        .scheme("virio").authority("channel").appendQueryParameter("profile", profile)
+        .scheme("tiveo").authority("channel").appendQueryParameter("profile", profile)
         .appendQueryParameter("kind", kind).apply { media?.let { appendQueryParameter("media", key(it)) } }.build()
 
     /** Called with the already-visible, profile-filtered For You feed; never loads recommendations. */
@@ -92,7 +92,7 @@ object TvHomeChannels {
                 val channel = PreviewChannel.Builder().setDisplayName(if (kind == "watchlist") "Watchlist" else "For You")
                     .setDescription("Tiveo ${if (kind == "watchlist") "saved titles" else "personal recommendations"}")
                     .setInternalProviderId(internalId)
-                    .setAppLinkIntent(Intent(Intent.ACTION_VIEW, Uri.parse("virio://channel?kind=$kind"), context, MainActivity::class.java))
+                    .setAppLinkIntent(Intent(Intent.ACTION_VIEW, Uri.parse("tiveo://channel?kind=$kind"), context, MainActivity::class.java))
                     .setLogo(logo).build()
                 helper.publishChannel(channel).also { id ->
                     // Only creation requests default visibility; never re-enable a hidden channel.
