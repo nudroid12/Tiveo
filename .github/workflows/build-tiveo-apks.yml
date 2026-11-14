@@ -29,7 +29,7 @@ jobs:
     # Only meaningful build jobs enter this group. A workflow_run whose job is
     # skipped above never gets to evict the real build.
     concurrency:
-      group: virio-dev-publish
+      group: tiveo-dev-publish
       cancel-in-progress: true
 
     steps:
@@ -37,9 +37,8 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: main
-          # Keep enough history to identify the exact [zip-applied] commit that
-          # belongs to the completed Apply ZIP Patch workflow.
-          fetch-depth: 20
+          # Release notes compare against each platform's last published build.
+          fetch-depth: 0
 
       - name: Determine build scope
         id: scope
@@ -156,9 +155,9 @@ jobs:
           # yet, build both once so it starts complete.
           if { [ "$BUILD_MOB" = "true" ] || [ "$BUILD_TV" = "true" ]; } \
             && { [ "$BUILD_MOB" != "true" ] || [ "$BUILD_TV" != "true" ]; }; then
-            if ! gh release view virio-dev >/dev/null 2>&1; then
+            if ! gh release view tiveo-dev >/dev/null 2>&1; then
               force_both
-              REASON="$REASON; virio-dev release missing, bootstrapping both apps"
+              REASON="$REASON; tiveo-dev release missing, bootstrapping both apps"
             fi
           fi
 
@@ -303,8 +302,8 @@ jobs:
           MOB_VERSION_NAME="${BASE_VERSIONS[0]}-dev.${VERSION_CODE}"
           TV_VERSION_NAME="${BASE_VERSIONS[1]}-dev.${VERSION_CODE}"
 
-          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/virio-dev-signing.jks"
-          test -s "$RUNNER_TEMP/virio-dev-signing.jks" || {
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/tiveo-dev-signing.jks"
+          test -s "$RUNNER_TEMP/tiveo-dev-signing.jks" || {
             echo "::error::Decoded signing keystore is empty."
             exit 1
           }
@@ -313,7 +312,7 @@ jobs:
             echo "VUEO_VERSION_CODE=$VERSION_CODE"
             echo "VUEO_VERSION_NAME=$MOB_VERSION_NAME"
             echo "VUEO_TV_VERSION_NAME=$TV_VERSION_NAME"
-            echo "VUEO_KEYSTORE_PATH=$RUNNER_TEMP/virio-dev-signing.jks"
+            echo "VUEO_KEYSTORE_PATH=$RUNNER_TEMP/tiveo-dev-signing.jks"
             echo "VUEO_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
           } >> "$GITHUB_ENV"
 
@@ -387,7 +386,7 @@ jobs:
                 | sed -n "s/^package: name='\([^']*\)'.*/\1/p" \
                 | head -n 1
             )"
-            [ "$MOB_PACKAGE" = "com.virio.mob" ] || {
+            [ "$MOB_PACKAGE" = "com.tiveo.mobile" ] || {
               echo "::error::Wrong MOB package: $MOB_PACKAGE"
               exit 1
             }
@@ -409,7 +408,7 @@ jobs:
                 | sed -n "s/^package: name='\([^']*\)'.*/\1/p" \
                 | head -n 1
             )"
-            [ "$TV_PACKAGE" = "com.virio.tv" ] || {
+            [ "$TV_PACKAGE" = "com.tiveo.tv" ] || {
               echo "::error::Wrong TV package: $TV_PACKAGE"
               exit 1
             }
@@ -422,6 +421,8 @@ jobs:
         if: steps.scope.outputs.should_build == 'true'
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
+          APPLY_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           BUILD_MOB: ${{ steps.scope.outputs.build_mob }}
           BUILD_TV: ${{ steps.scope.outputs.build_tv }}
         run: |
@@ -453,11 +454,91 @@ jobs:
           from pathlib import Path
           import json
           import os
+          import re
+          import subprocess
 
           repo = os.environ["GITHUB_REPOSITORY"]
           code = int(os.environ["VUEO_VERSION_CODE"])
           commit = os.environ["COMMIT_SHA"]
           published = os.environ["PUBLISHED_AT"]
+
+          def git(*args):
+              return subprocess.run(["git", *args], capture_output=True, text=True)
+
+          def resolve_commit(value):
+              if isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{7,40}", value):
+                  result = git("rev-parse", "--verify", value + "^{commit}")
+                  if result.returncode == 0:
+                      return result.stdout.strip()
+              return None
+
+          def previous_commit(feed_name):
+              result = subprocess.run(
+                  ["gh", "release", "download", "tiveo-dev", "--repo", repo,
+                   "--pattern", feed_name, "--output", "-"],
+                  capture_output=True, text=True,
+              )
+              if result.returncode != 0:
+                  print(f"Previous {feed_name} unavailable. Using the build's source range.")
+                  return None
+              try:
+                  feed = json.loads(result.stdout)
+              except ValueError:
+                  return None
+              if not isinstance(feed, dict):
+                  return None
+              previous = resolve_commit(feed.get("commitSha"))
+              if previous:
+                  return previous
+              # Existing feeds used a short commit hash in the old changelog.
+              notes = feed.get("changelog")
+              for note in notes if isinstance(notes, list) else []:
+                  if isinstance(note, str) and note.startswith("Commit "):
+                      previous = resolve_commit(note.removeprefix("Commit "))
+                      if previous:
+                          return previous
+              return None
+
+          def release_notes(platform, feed_name):
+              base = previous_commit(feed_name)
+              if not base:
+                  source = resolve_commit(os.environ.get("APPLY_HEAD_SHA"))
+                  if source and git("merge-base", "--is-ancestor", source, commit).returncode == 0:
+                      base = source
+                  else:
+                      parent = git("rev-parse", "--verify", commit + "^")
+                      base = parent.stdout.strip() if parent.returncode == 0 else None
+              if not base:
+                  return []
+              diff = git("diff", "--name-only", "--no-renames", "-z", base, commit)
+              if diff.returncode:
+                  print(f"Could not compare changes for {feed_name}.")
+                  return []
+              paths = diff.stdout.split("\0")
+              platform_code = f"{platform}/src/main/"
+              app_paths = [path for path in paths if path.startswith(platform_code)]
+              rules = (
+                  (("/ui/settings/system/TvSystemSettings.kt",), "Updated system settings and the About screen."),
+                  (("/ui/home/", "/ui/sidebar/"), "Updated the Home screen and navigation."),
+                  (("/ui/search/",), "Updated Search."),
+                  (("/ui/player/", "/core/player/"), "Updated playback controls."),
+                  (("/ui/detail/",), "Updated the title details screen."),
+                  (("/ui/library/",), "Updated My List."),
+                  (("/ui/profile/",), "Updated profiles."),
+                  (("/ui/update/", "/core/update/"), "Updated the in-app updater."),
+                  (("/ui/settings/",), "Updated Settings."),
+                  (("/ui/content/", "/ui/source/"), "Updated content and source selection."),
+              )
+              matched_notes = {
+                  next((note for patterns, note in rules if any(pattern in path for pattern in patterns)), None)
+                  for path in app_paths
+              }
+              notes = [note for _, note in rules if note in matched_notes]
+              if any(path.startswith("shared/") and "/src/main/" in path for path in paths):
+                  notes.append("Updated shared app components.")
+              if not notes and app_paths:
+                  notes.append("Updated app components.")
+              return notes[:3]
 
           if os.environ["BUILD_MOB"] == "true":
               mob = {
@@ -465,11 +546,9 @@ jobs:
                   "versionCode": code,
                   "versionName": os.environ["VUEO_VERSION_NAME"],
                   "title": "Tiveo MOB " + os.environ["VUEO_VERSION_NAME"],
-                  "changelog": [
-                      "Latest successful Tiveo MOB development build",
-                      "Commit " + commit[:7],
-                  ],
-                  "downloadUrl": f"https://github.com/{repo}/releases/download/virio-dev/Tiveo-MOB-dev.apk",
+                  "commitSha": commit,
+                  "changelog": release_notes("mob", "update.json"),
+                  "downloadUrl": f"https://github.com/{repo}/releases/download/tiveo-dev/Tiveo-MOB-dev.apk",
                   "sha256": os.environ["MOB_SHA256"],
                   "publishedAt": published,
               }
@@ -484,11 +563,9 @@ jobs:
                   "versionCode": code,
                   "versionName": os.environ["VUEO_TV_VERSION_NAME"],
                   "title": "Tiveo TV " + os.environ["VUEO_TV_VERSION_NAME"],
-                  "changelog": [
-                      "Latest successful Tiveo TV development build",
-                      "Commit " + commit[:7],
-                  ],
-                  "downloadUrl": f"https://github.com/{repo}/releases/download/virio-dev/Tiveo-TV-dev.apk",
+                  "commitSha": commit,
+                  "changelog": release_notes("tv", "tv-update.json"),
+                  "downloadUrl": f"https://github.com/{repo}/releases/download/tiveo-dev/Tiveo-TV-dev.apk",
                   "sha256": os.environ["TV_SHA256"],
                   "publishedAt": published,
               }
@@ -511,8 +588,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          if ! gh release view virio-dev >/dev/null 2>&1; then
-            gh release create virio-dev \
+          if ! gh release view tiveo-dev >/dev/null 2>&1; then
+            gh release create tiveo-dev \
               --target "$(git rev-parse HEAD)" \
               --title "Tiveo Dev" \
               --prerelease \
@@ -541,17 +618,17 @@ jobs:
             OLD_ASSETS+=("Virio-TV-dev.apk" "Virio-TV-dev.apk.sha256")
           fi
 
-          # Keep the existing tag and feed names for installed clients.
+          # Publish the new application IDs on a separate release from Virio.
           # Publish each APK before the feed starts pointing at it.
-          gh release upload virio-dev "${ASSETS[@]}" --clobber
-          gh release upload virio-dev "${FEEDS[@]}" --clobber
-          gh release edit virio-dev --title "Tiveo Dev"
+          gh release upload tiveo-dev "${ASSETS[@]}" --clobber
+          gh release upload tiveo-dev "${FEEDS[@]}" --clobber
+          gh release edit tiveo-dev --title "Tiveo Dev"
 
           # Remove the old names only for apps whose new feeds are published.
-          EXISTING_ASSETS="$(gh release view virio-dev --json assets --jq '.assets[].name')"
+          EXISTING_ASSETS="$(gh release view tiveo-dev --json assets --jq '.assets[].name')"
           for asset in "${OLD_ASSETS[@]}"; do
             if grep -Fxq -- "$asset" <<< "$EXISTING_ASSETS"; then
-              gh release delete-asset virio-dev "$asset" --yes
+              gh release delete-asset tiveo-dev "$asset" --yes
             fi
           done
 
@@ -570,7 +647,7 @@ jobs:
             echo "- Shared Core: compiled only when selected by the dependency graph"
             echo "- Unchanged app release assets: preserved"
             echo "- Actions APK artifacts: disabled"
-            echo "- Distribution: rolling \`virio-dev\` GitHub Release"
+            echo "- Distribution: rolling \`tiveo-dev\` GitHub Release"
 
             if [ -f dist/Tiveo-MOB-dev.apk ]; then
               echo "- MOB: \`${VUEO_VERSION_NAME:-built}\`"
