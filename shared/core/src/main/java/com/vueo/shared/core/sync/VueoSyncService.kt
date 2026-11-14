@@ -20,6 +20,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import com.vueo.shared.core.storage.CompactLibraryCodec
 import java.io.IOException
+import java.io.InterruptedIOException
+import java.net.UnknownHostException
+import javax.net.ssl.SSLException
 import java.util.UUID
 
 /** Local-first account sync. CAS conflicts choose cloud; a new user edit can supersede that revision. */
@@ -205,7 +208,7 @@ class VueoSyncService private constructor(private val context: Context) {
     }
     suspend fun signIn(email: String,password: String,register: Boolean=false): String = withContext(Dispatchers.IO) {
         accountGate.withLock {
-            check(ready) { "Sync is starting. Try again." }
+            if (!ready) throw SyncStarting()
             check(!connected()) { "Sign out before changing accounts." }
             require(email.trim().contains('@') && password.isNotBlank()) { "Enter your email and password." }
             val result=SyncHttp.post(if(register) "/auth/v1/signup?redirect_to="+android.net.Uri.encode(VueoSyncConfig.EMAIL_REDIRECT) else "/auth/v1/token?grant_type=password",
@@ -489,12 +492,33 @@ class VueoSyncService private constructor(private val context: Context) {
         fun get(context: Context): VueoSyncService=instance ?: synchronized(this) {
             instance ?: VueoSyncService(context.applicationContext).also { instance=it }
         }
+        private class SyncStarting : IllegalStateException()
+
         fun message(error: Throwable): String = when {
+            error is SyncStarting -> "Account sync is starting. Try again in a moment."
+            error is SyncNotConfigured -> "Account sync is not configured in this build."
+            error is UnknownHostException -> "Could not find the account server. Check your internet or DNS settings."
+            error is InterruptedIOException -> "Connection to the account server timed out. Try again."
+            error is SSLException -> "Could not establish a secure connection to the account server."
             error is SyncHttpError && error.code==429 -> "Too many requests. Try again shortly. Local changes are saved."
             error is SyncHttpError && error.reason=="email_not_confirmed" -> "Confirm your email, then sign in."
+            error is SyncHttpError && error.isSignup -> {
+                val reason = error.reason.takeIf { it.matches(Regex("[a-z][a-z0-9_]{0,63}")) }
+                val detail = reason?.let { "HTTP ${error.code}, $it" } ?: "HTTP ${error.code}"
+                val summary = when (reason) {
+                    "email_address_not_authorized" -> "The server is not allowed to send a confirmation email to this address."
+                    "over_email_send_rate_limit" -> "Too many confirmation emails were requested. Try again later."
+                    "weak_password" -> "Choose a stronger password."
+                    "user_already_exists", "email_exists" -> "An account already exists for this email."
+                    else -> "Could not create the account."
+                }
+                "$summary ($detail)"
+            }
             error is SyncHttpError && error.code in setOf(400,401) -> "Unable to sign in or refresh the session. Check your account details."
             error is SyncHttpError && error.code in setOf(404,403) -> "Sync setup is missing or access is denied. Apply the sync v2 SQL."
-            else -> "Sync unavailable. Local changes are saved; retry when online."
+            error is SyncHttpError -> "Account server returned HTTP ${error.code}. Try again later."
+            error is IOException -> "Could not complete the connection to the account server. Try again."
+            else -> "Account operation failed on this device. Local changes are saved."
         }
     }
 }

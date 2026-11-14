@@ -20,7 +20,12 @@ import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-internal class SyncHttpError(val code: Int, val reason: String) : IOException("Tiveo Sync HTTP $code")
+internal class SyncHttpError(
+    val code: Int,
+    val reason: String,
+    val isSignup: Boolean,
+) : IOException("Tiveo Sync HTTP $code")
+internal class SyncNotConfigured : IOException("Tiveo account sync is not configured.")
 internal object SyncHttp {
     private val client = OkHttpClient.Builder().callTimeout(25,TimeUnit.SECONDS)
         .connectTimeout(8,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS)
@@ -28,7 +33,7 @@ internal object SyncHttp {
     suspend fun post(path: String, value: JSONObject, token: String? = null, compact: Boolean=false): JSONObject =
         suspendCancellableCoroutine { continuation ->
             if (VueoSyncConfig.URL.isBlank() || VueoSyncConfig.KEY.isBlank()) {
-                continuation.resumeWithException(IOException("Tiveo account sync is not configured."))
+                continuation.resumeWithException(SyncNotConfigured())
                 return@suspendCancellableCoroutine
             }
             val builder = Request.Builder().url(VueoSyncConfig.URL+path)
@@ -60,9 +65,12 @@ internal object SyncHttp {
                                 }
                             }
                             val text = output.toString("UTF-8")
-                            val json = if (text.isBlank()) JSONObject() else JSONObject(text)
-                            if (!it.isSuccessful) throw SyncHttpError(it.code,json.optString("error_code",json.optString("code")))
-                            json
+                            if (!it.isSuccessful) {
+                                val body = try { JSONObject(text) } catch (_: org.json.JSONException) { null }
+                                val reason = body?.let { error -> error.optString("error_code", error.optString("code")) }.orEmpty()
+                                throw SyncHttpError(it.code, reason, path.startsWith("/auth/v1/signup?"))
+                            }
+                            if (text.isBlank()) JSONObject() else JSONObject(text)
                         }
                         if (continuation.isActive) continuation.resume(result)
                     } catch (error: Exception) { if (continuation.isActive) continuation.resumeWithException(error) }
