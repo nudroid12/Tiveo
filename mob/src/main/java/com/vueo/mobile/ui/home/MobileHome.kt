@@ -132,6 +132,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.alpha
@@ -1075,12 +1076,14 @@ private fun HomeFeaturedCarousel(
                         contentDescription = item.name,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop,
+                        alignment = BiasAlignment(0f, -.55f),
                         fallbackText = item.name,
                     )
                     Box(Modifier.fillMaxSize().background(
                         Brush.verticalGradient(
-                            0f to Color.Black.copy(alpha = .60f),
-                            .28f to Color.Transparent,
+                            0f to Color.Black.copy(alpha = .88f),
+                            .12f to Color.Black.copy(alpha = .58f),
+                            .30f to Color.Transparent,
                             .45f to Color.Transparent,
                             .78f to Color.Black.copy(alpha = .7f),
                             1f to Color(0xFF0B0B0B),

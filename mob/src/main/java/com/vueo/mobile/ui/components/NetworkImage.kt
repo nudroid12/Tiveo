@@ -276,6 +276,7 @@ fun NetworkImage(
     contentScale: ContentScale = ContentScale.Crop,
     fallbackText: String = "",
     transparentBackground: Boolean = false,
+    alignment: Alignment = Alignment.Center,
 ) {
     val context = LocalContext.current.applicationContext
     var targetSize by remember { mutableStateOf(IntSize.Zero) }
@@ -326,6 +327,7 @@ fun NetworkImage(
                 contentDescription = contentDescription,
                 modifier = Modifier.matchParentSize().alpha(imageAlpha),
                 contentScale = contentScale,
+                alignment = alignment,
             )
         }
 
