@@ -78,7 +78,7 @@ jobs:
               [ -n "$path" ] || continue
 
               case "$path" in
-                mob/*)
+                mobile/*)
                   BUILD_MOB=true
                   ;;
                 tv/*)
@@ -294,7 +294,7 @@ jobs:
               match = re.search(r'versionName\s*=\s*"([^"]+)"', text)
               return match.group(1).strip() if match else fallback
 
-          print(version("mob/build.gradle.kts", "0.0.0"))
+          print(version("mobile/build.gradle.kts", "0.0.0"))
           print(version("tv/build.gradle.kts", "0.0.0"))
           PY
           )
@@ -333,7 +333,7 @@ jobs:
           set -euo pipefail
 
           TASKS=()
-          [ "$BUILD_MOB" = "true" ] && TASKS+=(":mob:assembleRelease")
+          [ "$BUILD_MOB" = "true" ] && TASKS+=(":mobile:assembleRelease")
           [ "$BUILD_TV" = "true" ] && TASKS+=(":tv:assembleRelease")
 
           if [ "${#TASKS[@]}" -eq 0 ]; then
@@ -374,7 +374,7 @@ jobs:
           }
 
           if [ "$BUILD_MOB" = "true" ]; then
-            MOB_APK="$(find mob/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print -quit)"
+            MOB_APK="$(find mobile/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print -quit)"
             test -n "$MOB_APK" && test -s "$MOB_APK" || {
               echo "::error::MOB release APK was not generated."
               exit 1
@@ -547,7 +547,7 @@ jobs:
                   "versionName": os.environ["VUEO_VERSION_NAME"],
                   "title": "Tiveo MOB " + os.environ["VUEO_VERSION_NAME"],
                   "commitSha": commit,
-                  "changelog": release_notes("mob", "update.json"),
+                  "changelog": release_notes("mobile", "update.json"),
                   "downloadUrl": f"https://github.com/{repo}/releases/download/tiveo-dev/Tiveo-MOB-dev.apk",
                   "sha256": os.environ["MOB_SHA256"],
                   "publishedAt": published,

@@ -149,7 +149,7 @@ jobs:
             # App modules are repository-relative paths, never ZIP wrappers.
             # A module build.gradle.kts alone is not a repository root marker.
             case "$WRAPPER_NAME" in
-              tv|mob|shared|app|gradle|buildSrc|build-logic|src|tests|.github)
+              tv|mobile|shared|app|gradle|buildSrc|build-logic|src|tests|.github)
                 echo "Preserving repository directory: $WRAPPER_NAME"
                 ;;
               *)
