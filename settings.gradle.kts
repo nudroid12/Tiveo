@@ -16,7 +16,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "Virio"
 
-include(":mob")
+include(":mobile")
 include(":tv")
 include(":shared:core")
 
