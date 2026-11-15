@@ -136,7 +136,19 @@ internal fun TiveoTopBar(
 ) {
     var barBounds by remember { mutableStateOf<Rect?>(null) }
     val tabBounds = remember { mutableStateMapOf<String, Rect>() }
-    var barHasFocus by remember { mutableStateOf(false) }
+    var groupHasFocus by remember { mutableStateOf(false) }
+    var retainedBarFocus by remember { mutableStateOf(false) }
+    LaunchedEffect(groupHasFocus) {
+        if (groupHasFocus) {
+            retainedBarFocus = true
+        } else {
+            // Ignore brief focus loss while the D-pad moves between tabs.
+            withFrameNanos { }
+            withFrameNanos { }
+            retainedBarFocus = false
+        }
+    }
+    val barHasFocus = groupHasFocus || retainedBarFocus
     val barAlpha by animateFloatAsState(
         targetValue = if (barHasFocus) 1f else .82f,
         animationSpec = tween(durationMillis = 180),
@@ -155,7 +167,7 @@ internal fun TiveoTopBar(
                 .matchParentSize()
                 .padding(horizontal = MODERN_HOME_CONTENT_START_PADDING)
                 .graphicsLayer { alpha = barAlpha }
-                .onFocusChanged { barHasFocus = it.hasFocus }
+                .onFocusChanged { groupHasFocus = it.hasFocus }
                 .focusGroup(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
