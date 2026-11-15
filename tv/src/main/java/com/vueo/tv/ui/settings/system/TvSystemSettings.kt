@@ -2,11 +2,11 @@ package com.vueo.tv.settings
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SettingsInputComponent
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.runtime.Composable
@@ -17,7 +17,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.sp
 import com.vueo.shared.core.dna.UserDnaPreferences
 import com.vueo.shared.core.dna.UserDnaSnapshot
 import com.vueo.shared.core.extensions.CatalogDiscoveryCache
@@ -42,6 +47,9 @@ import com.vueo.tv.BuildConfig
 import com.vueo.tv.R
 import com.vueo.tv.core.TvRuntime
 import com.vueo.tv.ui.TvDesign
+import com.vueo.tv.ui.TvDialogButton
+import com.vueo.tv.ui.TvThemedDialog
+import com.vueo.tv.ui.motion.LocalTvMotionFinish
 import com.vueo.tv.ui.TvSidebarPreferences
 import com.vueo.tv.ui.TvSidebarStyle
 import com.vueo.tv.update.TvUpdateManager
@@ -179,6 +187,7 @@ internal fun TvAboutSettings(
     val installPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { restoreSettingsFocus() }
+    var info by remember { mutableStateOf<AboutInfo?>(null) }
     var tiveoRowPresses by remember(developerOptionsEnabled) { mutableIntStateOf(0) }
     var checking by remember { mutableStateOf(false) }
     var downloading by remember { mutableStateOf(false) }
@@ -227,7 +236,7 @@ internal fun TvAboutSettings(
             subtitle = "",
             identityCard = true,
             iconDrawableRes = R.drawable.virio_wordmark,
-            value = BuildConfig.VERSION_NAME,
+            value = "Version ${BuildConfig.VERSION_NAME}",
             onActivate = {
                 if (developerOptionsEnabled) {
                     onUnlockNotice("Developer options are already unlocked.")
@@ -254,17 +263,74 @@ internal fun TvAboutSettings(
                 available != null -> "Install Update"
                 else -> "Check for Updates"
             },
-            subtitle = status ?: available?.versionName?.let { "New version · $it" }.orEmpty(),
-            value = if (downloading) "$progress%" else "",
+            subtitle = status ?: available?.versionName?.let { "New version · $it" }
+                ?: "Check and install the latest Tiveo build.",
+            value = when {
+                downloading -> "$progress%"
+                !checking && available == null -> "Check"
+                else -> ""
+            },
             onActivate = ::updateAction,
             showDivider = false,
             actionCard = true,
-            icon = Icons.Default.Refresh,
+        ),
+        TvSettingsEntry(
+            id = "about-privacy",
+            title = AboutInfo.PRIVACY.title,
+            subtitle = "View how Tiveo handles app data.",
+            onActivate = { info = AboutInfo.PRIVACY },
+            showDivider = false,
+            actionCard = true,
+        ),
+        TvSettingsEntry(
+            id = "about-licenses",
+            title = AboutInfo.LICENSES.title,
+            subtitle = "View data source credits and open source notices.",
+            onActivate = { info = AboutInfo.LICENSES },
+            showDivider = false,
+            actionCard = true,
         ),
     )
     TvSettingsListScreen(
-        "About Tiveo", "App information and updates",
+        "About Tiveo", "App information, updates, and legal notices",
         entries, onNavigate, onProfile, onBack,
         preferredFocusId = TV_ABOUT_UPDATE_ROW_ID,
     )
+
+    info?.let { notice ->
+        val closeFocus = remember { FocusRequester() }
+        val close = {
+            info = null
+            restoreSettingsFocus()
+        }
+        TvThemedDialog(notice.title, closeFocus, close) {
+            val finish = LocalTvMotionFinish.current
+            notice.paragraphs.forEach { paragraph ->
+                Text(paragraph, color = TvDesign.Muted, fontSize = 13.sp, lineHeight = 19.sp)
+            }
+            TvDialogButton(
+                label = "Close",
+                modifier = Modifier.align(Alignment.End).focusRequester(closeFocus),
+                onClick = { finish(close) },
+            )
+        }
+    }
+}
+
+private enum class AboutInfo(val title: String, val paragraphs: List<String>) {
+    PRIVACY(
+        "Privacy",
+        listOf(
+            "Tiveo stores your settings and library on this device.",
+            "When Account Sync is enabled, supported profile, library and connection data are sent to the account server. Manage sync in Settings → Account.",
+            "Enabled addons and services receive requests when Tiveo uses them to fetch content or metadata.",
+        ),
+    ),
+    LICENSES(
+        "Licenses & Attribution",
+        listOf(
+            "The collection interface and addon compatibility code include work from Nuvio contributors. The source repository includes GPL-3.0 notices in LICENSES and credits in THIRD_PARTY_COLLECTIONS.md.",
+            "This product uses the TMDB API but is not endorsed or certified by TMDB.",
+        ),
+    ),
 }

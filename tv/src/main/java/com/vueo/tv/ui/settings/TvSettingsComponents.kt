@@ -81,6 +81,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -1270,12 +1271,10 @@ internal fun TvSettingsRow(
             )
             Text(
                 text = entry.value,
-                color = if (focused) TvDesign.Black else TvDesign.White,
+                color = if (focused) TvDesign.White else TvDesign.Muted,
                 fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier
-                    .background(if (focused) TvDesign.White else TvDesign.SurfaceRaised, RoundedCornerShape(50))
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                fontWeight = if (focused) FontWeight.Bold else FontWeight.Medium,
+                textDecoration = if (focused) TextDecoration.Underline else TextDecoration.None,
             )
         }
         return
@@ -1308,6 +1307,7 @@ internal fun TvSettingsRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .padding(vertical = if (entry.actionCard) 4.dp else 0.dp)
             .heightIn(min = if (compact) 48.dp else 58.dp)
             .focusRequester(requester)
             .onFocusChanged {
