@@ -55,6 +55,25 @@ import kotlinx.coroutines.launch
 private val PromptShape = RoundedCornerShape(18.dp)
 private val ActionShape = RoundedCornerShape(50)
 
+private val CommitNote = Regex("Commit [0-9a-f]{7,40}", RegexOption.IGNORE_CASE)
+
+private fun visibleUpdateNotes(changelog: List<String>): List<String> {
+    fun noteKey(note: String) = note.trimEnd('.', '!', '?').trimEnd().lowercase()
+
+    val notes = changelog.map(String::trim)
+        .filterNot { note ->
+            note.isBlank() ||
+                note.startsWith("Latest successful ", ignoreCase = true) ||
+                CommitNote.matches(note)
+        }
+        .distinctBy(::noteKey)
+
+    val hasSystemSettingsNote = notes.any {
+        noteKey(it) == "updated system settings and the about screen"
+    }
+    return notes.filterNot { hasSystemSettingsNote && noteKey(it) == "updated settings" }.take(3)
+}
+
 @Composable
 fun TvUpdatePrompt(
     release: TvUpdateRelease,
@@ -70,12 +89,7 @@ fun TvUpdatePrompt(
     var status by remember(release.versionCode) { mutableStateOf<String?>(null) }
 
     val canDownload = release.downloadUrl != null
-    val notes = remember(release.changelog) {
-        release.changelog.filterNot { note ->
-            note.startsWith("Latest successful ", ignoreCase = true) ||
-                note.matches(Regex("Commit [0-9a-fA-F]{7,40}", RegexOption.IGNORE_CASE))
-        }.take(3)
-    }
+    val notes = remember(release.changelog) { visibleUpdateNotes(release.changelog) }
 
     TvModalDialog(
         onDismissRequest = { if (!downloading) onLater() },
@@ -90,12 +104,12 @@ fun TvUpdatePrompt(
         ) {
             Column(
                 modifier = Modifier
-                    .widthIn(max = 360.dp)
+                    .widthIn(max = 500.dp)
                     .fillMaxWidth()
                     .clip(PromptShape)
                     .background(Color(0xFF161B25))
                     .border(1.dp, TvDesign.White.copy(alpha = .14f), PromptShape)
-                    .padding(18.dp),
+                    .padding(horizontal = 22.dp, vertical = 14.dp),
             ) {
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -104,7 +118,7 @@ fun TvUpdatePrompt(
                     Image(
                         painter = painterResource(R.drawable.tiveo_tv_installer_icon),
                         contentDescription = null,
-                        modifier = Modifier.size(40.dp),
+                        modifier = Modifier.size(36.dp),
                     )
                     Column(modifier = Modifier.weight(1f)) {
                         TextLine(
@@ -126,7 +140,7 @@ fun TvUpdatePrompt(
                 }
 
                 if (notes.isNotEmpty()) {
-                    Spacer(Modifier.height(18.dp))
+                    Spacer(Modifier.height(12.dp))
                     TextLine(
                         text = "What’s new",
                         sizeSp = 15,
@@ -134,7 +148,7 @@ fun TvUpdatePrompt(
                         color = TvDesign.White,
                     )
                     notes.forEach { note ->
-                        Spacer(Modifier.height(5.dp))
+                        Spacer(Modifier.height(4.dp))
                         TextLine(
                             text = note,
                             sizeSp = 14,
@@ -146,7 +160,7 @@ fun TvUpdatePrompt(
                 }
 
                 if (downloading) {
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(10.dp))
                     TextLine(
                         text = "Downloading… $progress%",
                         sizeSp = 13,
@@ -178,7 +192,7 @@ fun TvUpdatePrompt(
                     )
                 }
 
-                Spacer(Modifier.height(18.dp))
+                Spacer(Modifier.height(12.dp))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
