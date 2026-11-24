@@ -3,6 +3,7 @@ import com.vueo.shared.core.search.SearchResultOrderPolicy
 import com.vueo.shared.core.search.SearchMediaFilter
 import com.vueo.shared.core.search.SearchOrchestrator
 import com.vueo.shared.core.search.SearchPolicy
+import com.vueo.tv.ui.rememberTvOkToEdit
 import com.vueo.shared.core.search.DiscoverCatalogPolicy
 import com.vueo.shared.core.search.DiscoverSortMode
 
@@ -940,11 +941,13 @@ private fun TvMobileSearchField(
         )
         Spacer(Modifier.width(11.dp))
         Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            val editor = rememberTvOkToEdit()
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
                 singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                readOnly = editor.readOnly,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search, showKeyboardOnFocus = false),
                 textStyle = TextStyle(
                     color = TvDesign.White,
                     fontSize = 15.sp,
@@ -956,6 +959,7 @@ private fun TvMobileSearchField(
                         focused = it.isFocused
                         if (it.isFocused) onFocused()
                     }
+                    .then(editor.modifier)
                     .onPreviewKeyEvent { event ->
                         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                         when (event.nativeKeyEvent.keyCode) {
