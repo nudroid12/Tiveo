@@ -1277,11 +1277,12 @@ private fun TvSearchPosterTile(
         )
         Spacer(Modifier.height(2.dp))
         Text(
-            text = if (catalogLabel.isNullOrBlank()) {
-                listOfNotNull(item.releaseInfo, searchTypeLabel(item)).joinToString(" • ")
-            } else {
-                listOf(searchTypeLabel(item), catalogLabel).joinToString(" • ")
-            },
+            text = listOfNotNull(
+                SearchPolicy.releaseYear(item).takeIf { it > 0 }?.toString()
+                    ?: item.releaseInfo.takeIf { catalogLabel.isNullOrBlank() },
+                searchTypeLabel(item),
+                catalogLabel?.takeIf { it.isNotBlank() },
+            ).joinToString(" • "),
             color = TvDesign.Muted,
             fontSize = 9.sp,
             maxLines = 1,

@@ -1028,6 +1028,7 @@ internal fun SearchScreen(
                         item ->
                         SearchPosterTile(
                             item = item,
+                            yearLabel = SearchPolicy.releaseYear(item).takeIf { it > 0 }?.toString(),
                             catalogLabel =
                                 searchCatalogLabel(
                                     engine = engine,
@@ -1428,6 +1429,7 @@ internal fun SearchPosterTile(
     item: MediaItem,
     modifier: Modifier = Modifier,
     catalogLabel: String? = null,
+    yearLabel: String? = null,
     onClick: () -> Unit,
 ) {
     Column(
@@ -1481,29 +1483,11 @@ internal fun SearchPosterTile(
         )
 
         Text(
-            text =
-                if (
-                    catalogLabel
-                        .isNullOrBlank()
-                ) {
-                    listOfNotNull(
-                        item.releaseInfo,
-                        searchTypeLabel(
-                            item
-                        ),
-                    ).joinToString(
-                        " • "
-                    )
-                } else {
-                    listOf(
-                        searchTypeLabel(
-                            item
-                        ),
-                        catalogLabel,
-                    ).joinToString(
-                        " • "
-                    )
-                },
+            text = listOfNotNull(
+                yearLabel ?: item.releaseInfo.takeIf { catalogLabel.isNullOrBlank() },
+                searchTypeLabel(item),
+                catalogLabel?.takeIf { it.isNotBlank() },
+            ).joinToString(" • "),
             color =
                 VueoPalette.Muted,
             fontSize = 9.sp,
