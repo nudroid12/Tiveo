@@ -36,6 +36,7 @@ internal fun TvThemedDialog(
     initialFocus: FocusRequester,
     onDismissRequest: () -> Unit,
     dismissOnBackPress: Boolean = true,
+    maxWidth: androidx.compose.ui.unit.Dp = 460.dp,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     TvModalDialog(
@@ -51,7 +52,7 @@ internal fun TvThemedDialog(
             contentAlignment = Alignment.Center,
         ) {
             Column(
-                modifier = Modifier.widthIn(max = 460.dp).fillMaxWidth()
+                modifier = Modifier.widthIn(max = maxWidth).fillMaxWidth()
                     .background(TvDesign.Surface, shape)
                     .border(1.dp, TvDesign.White.copy(alpha = .22f), shape)
                     .padding(24.dp),

@@ -123,6 +123,8 @@ internal data class TvSettingsEntry(
     val providerPanelEnd: Boolean = false,
     val supportingContent: (@Composable () -> Unit)? = null,
     val operationStatus: String? = null,
+    val onAddonConfigure: (() -> Unit)? = null,
+    val onAddonRemove: (() -> Unit)? = null,
     val iconDrawableRes: Int? = null,
     val showDivider: Boolean = true,
     val identityCard: Boolean = false,

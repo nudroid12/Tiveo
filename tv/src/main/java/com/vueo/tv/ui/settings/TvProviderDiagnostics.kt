@@ -89,106 +89,124 @@ internal fun TvProviderDiagnosticDialog(
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
-    var rawExpanded by remember(repository.manifestUrl, provider.id) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    var showingLog by remember(repository.manifestUrl, provider.id) { mutableStateOf(false) }
     val restoreSettingsFocus = rememberTvSettingsDeferredFocusRestore()
+    val closeFocus = remember { FocusRequester() }
+    val logButtonFocus = remember { FocusRequester() }
+    val logFocus = remember { FocusRequester() }
+    val scroll = rememberScrollState()
+    val scrollStep = with(LocalDensity.current) { 80.dp.roundToPx() }
 
     fun closeAndRestore() {
         onDismiss()
         restoreSettingsFocus()
     }
 
-    val closeFocus = remember { FocusRequester() }
-    TvThemedDialog("Provider Diagnostic", closeFocus, ::closeAndRestore) {
+    TvThemedDialog("Provider Diagnostic", closeFocus, ::closeAndRestore, maxWidth = 680.dp) {
         val finish = LocalTvMotionFinish.current
-        Text("${provider.name} • v${provider.version}", color = TvDesign.Muted, fontSize = 12.sp)
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 300.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            if (health == null) {
-                Text(
-                    text = "No diagnostic captured yet. Run source discovery for this provider, then reopen diagnostics.",
-                    color = TvDesign.Muted,
-                    fontSize = 12.sp,
-                )
-            } else {
-                providerRequestLabelOrNull(health)?.let { DiagnosticLine("Request", it) }
-                ProviderDiagnosticSummary.facts(health).forEach { (label, value) ->
-                    DiagnosticLine(label, sanitizeDiagnosticText(value))
-                }
-                if (ProviderDiagnosticSummary.hasFailure(health, providerCodeReady)) {
-                    DiagnosticLine("Failure", "${providerFailureStage(health, providerCodeReady)} • ${providerFailureCategory(health)}")
-                }
-                health.errorType?.takeIf { it.isNotBlank() }?.let {
-                    DiagnosticLine("Error type", sanitizeDiagnosticText(it))
-                }
-                providerHttpStatus(health)?.let { DiagnosticLine("HTTP", it) }
-                providerRelevantTimingLabel(health)?.let { DiagnosticLine("Timing", it) }
-                ProviderDiagnosticProgress.lastStage(health.logs)?.let { DiagnosticLine("Last stage", sanitizeDiagnosticText(it)) }
-                ProviderDiagnosticProgress.pending(health.logs).takeIf { it.isNotEmpty() }?.let {
-                    DiagnosticLine("Pending requests", it.joinToString("\n") { line -> sanitizeDiagnosticText(line) })
-                }
-                if (!providerCodeReady) {
-                    DiagnosticLine("Provider code", "Missing or not ready")
-                }
-                health.error?.takeIf { it.isNotBlank() }?.let {
-                    DiagnosticLine("Error", sanitizeDiagnosticText(it))
-                }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text("${provider.name} • v${provider.version}", modifier = Modifier.weight(1f),
+                color = TvDesign.Muted, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (health != null) {
+                val status = if (currentlyEnabled) ProviderDiagnosticSummary.statusLabel(health) else "Disabled"
+                val noResults = status == "No results"
+                Text(status, color = if (noResults) Color(0xFFFFC66D) else TvDesign.White,
+                    fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.background(TvDesign.SurfaceRaised, RoundedCornerShape(8.dp))
+                        .padding(horizontal = 10.dp, vertical = 5.dp))
+            }
+        }
 
-                Surface(
-                    color = TvDesign.Surface,
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
+        val report = remember(repository, provider, health, currentlyEnabled, providerCodeReady) {
+            health?.let { providerDiagnosticFullLog(repository, provider, it, currentlyEnabled, providerCodeReady) }
+        }
+        when {
+            health == null -> Text(
+                "No diagnostic captured yet. Run source discovery for this provider, then reopen diagnostics.",
+                color = TvDesign.Muted, fontSize = 13.sp,
+            )
+            showingLog && report != null -> {
+                var logFocused by remember { mutableStateOf(false) }
+                Column(
+                    Modifier.fillMaxWidth().heightIn(max = 246.dp)
+                        .focusRequester(logFocus)
+                        .onFocusChanged { logFocused = it.isFocused }
+                        .focusProperties { down = logButtonFocus }
+                        .onPreviewKeyEvent { event ->
+                            val key = event.nativeKeyEvent
+                            val down = key.keyCode == KeyEvent.KEYCODE_DPAD_DOWN
+                            if ((down && scroll.value < scroll.maxValue) ||
+                                (key.keyCode == KeyEvent.KEYCODE_DPAD_UP && scroll.value > 0)) {
+                                if (key.action == KeyEvent.ACTION_DOWN) {
+                                    val position = (scroll.value + if (down) scrollStep else -scrollStep)
+                                        .coerceIn(0, scroll.maxValue)
+                                    scope.launch { scroll.scrollTo(position) }
+                                }
+                                true
+                            } else false
+                        }
+                        .background(TvDesign.SurfaceRaised, RoundedCornerShape(8.dp))
+                        .border(1.dp, if (logFocused) TvDesign.White else Color.Transparent, RoundedCornerShape(8.dp))
+                        .focusable().verticalScroll(scroll).padding(12.dp),
                 ) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Text(ProviderDiagnosticSummary.noteTitle(health, providerCodeReady), fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                        Text(
-                            text = providerLikelyCause(health, providerCodeReady),
-                            color = TvDesign.Muted,
-                            fontSize = 11.sp,
-                        )
+                    Text(report, color = TvDesign.White, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                }
+            }
+            else -> {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    DiagnosticMetric("Request", providerRequestLabelOrNull(health) ?: "Unavailable", Modifier.weight(1.7f))
+                    val result = if (health.status == ProviderHealthStatus.UNKNOWN && health.streamCount == 0) {
+                        "Not captured"
+                    } else "${health.streamCount.coerceAtLeast(0)} found"
+                    DiagnosticMetric("Sources", result, Modifier.weight(1f))
+                    DiagnosticMetric("Timing", providerRelevantTimingLabel(health) ?: "Unavailable", Modifier.weight(1f))
+                }
+                ProviderDiagnosticProgress.lastStage(health.logs)?.let { stage ->
+                    Row(Modifier.fillMaxWidth()
+                        .background(TvDesign.SurfaceRaised, RoundedCornerShape(8.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Last stage", color = TvDesign.Muted, fontSize = 12.sp)
+                        Text(sanitizeDiagnosticText(stage), color = TvDesign.White, fontSize = 12.sp,
+                            maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
                 }
-
-                TvDialogButton(
-                    label = if (rawExpanded) "Hide technical log" else "Show technical log",
-                    onClick = { rawExpanded = !rawExpanded },
-                )
-                if (rawExpanded) {
-                    Text(
-                        text = providerRawDiagnosticLog(health),
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp,
-                        color = TvDesign.Muted,
-                    )
+                if (ProviderDiagnosticSummary.hasFailure(health, providerCodeReady)) {
+                    Text(providerLikelyCause(health, providerCodeReady), color = TvDesign.Muted, fontSize = 12.sp,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)) {
-            TvDialogButton("Close", { finish(::closeAndRestore) }, Modifier.focusRequester(closeFocus))
-            if (health != null) {
-                TvDialogButton("Copy Debug Log", onClick = {
-                    copyProviderDiagnostic(
-                        context = context,
-                        text = providerDiagnosticFullLog(
-                            repository = repository,
-                            provider = provider,
-                            health = health,
-                            currentlyEnabled = currentlyEnabled,
-                            providerCodeReady = providerCodeReady,
-                        ),
-                    )
-                })
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            if (report != null) {
+                TvDialogButton(
+                    label = if (showingLog) "Back to summary" else "View raw log",
+                    modifier = Modifier.focusRequester(logButtonFocus).focusProperties {
+                        if (showingLog) up = logFocus
+                    },
+                    onClick = { showingLog = !showingLog },
+                )
             }
+            Spacer(Modifier.weight(1f))
+            if (report != null) {
+                TvDialogButton("Copy debug log", { copyProviderDiagnostic(context, report) })
+            }
+            TvDialogButton("Close", { finish(::closeAndRestore) }, Modifier.focusRequester(closeFocus))
         }
     }
 }
 
+@Composable
+private fun DiagnosticMetric(label: String, value: String, modifier: Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label.uppercase(), color = TvDesign.Muted, fontSize = 11.sp)
+        Text(value, color = TvDesign.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+            maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
+}
 
 @Composable
 private fun TvDiagnosticsSearchField(
