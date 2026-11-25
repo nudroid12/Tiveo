@@ -37,6 +37,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -148,6 +149,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
@@ -259,56 +261,27 @@ import kotlin.math.roundToInt
 
 @Composable
 internal fun HomeContinueWatchingSection(
-    entries:
-        List<LibraryPlaybackEntry>,
-    onPlaybackClick:
-        (LibraryPlaybackEntry) -> Unit,
-    onHold:
-        (LibraryPlaybackEntry, IntOffset) -> Unit,
+    entries: List<LibraryPlaybackEntry>,
+    onPlaybackClick: (LibraryPlaybackEntry) -> Unit,
+    onHold: (LibraryPlaybackEntry, IntOffset) -> Unit,
 ) {
-    Column(
-        verticalArrangement =
-            Arrangement.spacedBy(
-                10.dp
-            ),
-    ) {
-        HomeSectionHeader(
-            title =
-                "Continue Watching",
-        )
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        HomeSectionHeader(title = "Continue Watching")
 
-        LazyRow(
-            contentPadding =
-                PaddingValues(
-                    horizontal = 16.dp
-                ),
-            horizontalArrangement =
-                Arrangement.spacedBy(
-                    12.dp
-                ),
-        ) {
-            items(
-                items = entries,
-                key = {
-                    it.mediaKey
-                },
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            val cardWidth = (maxWidth * .60f).coerceAtMost(360.dp)
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                entry ->
-                HomeContinueWatchingCard(
-                    entry = entry,
-                    onClick = {
-                        onPlaybackClick(
-                            entry
-                        )
-                    },
-                    onHold = {
-                        anchor ->
-                        onHold(
-                            entry,
-                            anchor,
-                        )
-                    },
-                )
+                items(items = entries, key = { it.mediaKey }) { entry ->
+                    HomeContinueWatchingCard(
+                        entry = entry,
+                        cardWidth = cardWidth,
+                        onClick = { onPlaybackClick(entry) },
+                        onHold = { anchor -> onHold(entry, anchor) },
+                    )
+                }
             }
         }
     }
@@ -317,230 +290,115 @@ internal fun HomeContinueWatchingSection(
 @Composable
 private fun HomeContinueWatchingCard(
     entry: LibraryPlaybackEntry,
+    cardWidth: Dp,
     onClick: () -> Unit,
     onHold: (IntOffset) -> Unit,
 ) {
-    val remainingLabel =
-        homeRemainingTimeLabel(
-            entry
-        )
+    val remainingLabel = homeRemainingTimeLabel(entry)
 
     Surface(
-        modifier =
-            Modifier
-                .width(158.dp)
-                .aspectRatio(
-                    16f / 9f
-                )
-                .clickOrHoldForMenu(
-                    onClick = onClick,
-                    onHold = onHold,
-                ),
-        shape =
-            RoundedCornerShape(
-                15.dp
+        modifier = Modifier
+            .width(cardWidth)
+            .aspectRatio(16f / 9f)
+            .clickOrHoldForMenu(
+                onClick = onClick,
+                onHold = onHold,
             ),
-        color =
-            VueoPalette.Surface,
+        shape = RoundedCornerShape(15.dp),
+        color = VueoPalette.Surface,
     ) {
         Box {
             NetworkImage(
-                url =
-                    entry.media.background
-                        ?: entry.media.poster,
-                contentDescription =
-                    entry.media.name,
-                modifier =
-                    Modifier.fillMaxSize(),
-                contentScale =
-                    ContentScale.Crop,
-                fallbackText =
-                    entry.media.name,
+                url = entry.media.background ?: entry.media.poster,
+                contentDescription = entry.media.name,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+                fallbackText = entry.media.name,
             )
 
             Box(
-                modifier =
-                    Modifier
-                        .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                colors =
-                                    listOf(
-                                        Color.Black
-                                            .copy(
-                                                alpha = .04f
-                                            ),
-                                        Color.Black
-                                            .copy(
-                                                alpha = .18f
-                                            ),
-                                        Color.Black
-                                            .copy(
-                                                alpha = .84f
-                                            ),
-                                    )
-                            )
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color.Black.copy(alpha = .04f),
+                                Color.Black.copy(alpha = .18f),
+                                Color.Black.copy(alpha = .84f),
+                            ),
                         ),
+                    ),
             )
 
-            remainingLabel
-                ?.let {
-                    remaining ->
-                    Surface(
-                        modifier =
-                            Modifier
-                                .align(
-                                    Alignment.TopEnd
-                                )
-                                .padding(
-                                    8.dp
-                                ),
-                        shape =
-                            RoundedCornerShape(
-                                10.dp
-                            ),
-                        color =
-                            Color.Black
-                                .copy(
-                                    alpha = .72f
-                                ),
-                    ) {
+            remainingLabel?.let { remaining ->
+                Surface(
+                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    color = Color.Black.copy(alpha = .72f),
+                ) {
+                    Text(
+                        text = remaining,
+                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        lineHeight = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                    )
+                }
+            }
+
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth()
+                    .padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                    homeEpisodeLabel(entry)?.let { episode ->
                         Text(
-                            text =
-                                remaining,
-                            modifier =
-                                Modifier.padding(
-                                    horizontal =
-                                        8.dp,
-                                    vertical =
-                                        5.dp,
-                                ),
-                            color =
-                                Color.White,
-                            fontSize =
-                                9.sp,
-                            fontWeight =
-                                FontWeight
-                                    .SemiBold,
+                            text = episode,
+                            color = Color.White.copy(alpha = .88f),
+                            fontSize = 10.sp,
+                            lineHeight = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                        )
+                    }
+
+                    Text(
+                        text = entry.media.name,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        lineHeight = 18.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+
+                    entry.episodeTitle?.takeIf { it.isNotBlank() }?.let { episodeTitle ->
+                        Text(
+                            text = episodeTitle,
+                            color = Color.White.copy(alpha = .78f),
+                            fontSize = 10.sp,
+                            lineHeight = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
 
-            Column(
-                modifier =
-                    Modifier
-                        .align(
-                            Alignment
-                                .BottomStart
-                        )
-                        .fillMaxWidth()
-                        .padding(
-                            start = 10.dp,
-                            end = 10.dp,
-                            bottom = 8.dp,
-                        ),
-            ) {
-                Column(
-                    verticalArrangement =
-                        Arrangement.spacedBy(
-                            0.dp
-                        ),
-                ) {
-                    homeEpisodeLabel(
-                        entry
-                    )
-                        ?.let {
-                            episode ->
-                            Text(
-                                text =
-                                    episode,
-                                color =
-                                    Color.White
-                                        .copy(
-                                            alpha =
-                                                .88f
-                                        ),
-                                fontSize =
-                                    9.sp,
-                                lineHeight =
-                                    11.sp,
-                                fontWeight =
-                                    FontWeight
-                                        .Medium,
-                                maxLines = 1,
-                            )
-                        }
-
-                    Text(
-                        text =
-                            entry.media.name,
-                        color =
-                            Color.White,
-                        fontWeight =
-                            FontWeight.Bold,
-                        fontSize = 13.sp,
-                        lineHeight = 14.sp,
-                        maxLines = 1,
-                        overflow =
-                            TextOverflow
-                                .Ellipsis,
-                    )
-
-                    entry.episodeTitle
-                        ?.takeIf {
-                            it.isNotBlank()
-                        }
-                        ?.let {
-                            episodeTitle ->
-                            Text(
-                                text =
-                                    episodeTitle,
-                                color =
-                                    Color.White
-                                        .copy(
-                                            alpha =
-                                                .68f
-                                        ),
-                                fontSize =
-                                    9.sp,
-                                lineHeight =
-                                    11.sp,
-                                maxLines = 1,
-                                overflow =
-                                    TextOverflow
-                                        .Ellipsis,
-                            )
-                        }
-                }
-
                 LinearProgressIndicator(
-                    progress = {
-                        entry
-                            .progressFraction
-                            .coerceIn(
-                                0f,
-                                1f
-                            )
-                    },
-                    modifier =
-                        Modifier
-                            .padding(
-                                top = 4.dp
-                            )
-                            .fillMaxWidth()
-                            .height(3.dp)
-                            .clip(
-                                RoundedCornerShape(
-                                    50
-                                )
-                            ),
-                    color =
-                        VueoPalette.Accent,
-                    trackColor =
-                        Color.White
-                            .copy(
-                                alpha = .24f
-                            ),
+                    progress = { entry.progressFraction.coerceIn(0f, 1f) },
+                    modifier = Modifier
+                        .padding(top = 6.dp)
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(50)),
+                    color = VueoPalette.Accent,
+                    trackColor = Color.White.copy(alpha = .38f),
+                    gapSize = 0.dp,
+                    drawStopIndicator = {},
                 )
             }
         }
