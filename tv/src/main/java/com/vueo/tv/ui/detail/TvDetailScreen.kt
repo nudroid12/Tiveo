@@ -13,6 +13,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import com.vueo.shared.core.detail.DetailUpstreamPolicy
 import com.vueo.shared.core.enrichment.MediaRating
@@ -40,6 +41,7 @@ private data class DetailLibrarySnapshot(
     val movieWatched: Boolean,
     val history: List<LibraryPlaybackEntry>,
     val playbackEntries: List<LibraryPlaybackEntry>,
+    val watchedEpisodeKeys: Set<String>,
 )
 
 /**
@@ -107,6 +109,13 @@ fun TvDetailScreen(
     var history by remember(initial.id, initial.type, initial.sourceExtensionId) {
         mutableStateOf<List<LibraryPlaybackEntry>>(emptyList())
     }
+    val episodeManagementScope = rememberCoroutineScope()
+    val episodeManagementContext = androidx.compose.ui.platform.LocalContext.current
+    val episodeManagementProfile = remember(initial.id, initial.type) { runtime.profileStore.activeProfileId() }
+    var episodeManagementChanged by remember(initial.id, initial.type) { mutableStateOf(false) }
+    var episodeManagementBusy by remember(initial.id, initial.type) { mutableStateOf(false) }
+    var watchedEpisodeKeys by remember(initial.id, initial.type) { mutableStateOf<Set<String>>(emptySet()) }
+    val effectiveInitialEntry = initialLibraryEntry.takeUnless { episodeManagementChanged }
     var playbackEntries by remember(initial.id, initial.type, initial.sourceExtensionId) {
         mutableStateOf<List<LibraryPlaybackEntry>>(emptyList())
     }
@@ -177,7 +186,8 @@ fun TvDetailScreen(
         val playbackTarget = detailPlaybackTargetEpisode(
             media = media,
             entries = entries,
-            initialEntry = initialLibraryEntry,
+            initialEntry = initialLibraryEntry.takeUnless { episodeManagementChanged },
+            watchedEpisodes = watchedEpisodeKeys,
         )
         val target = playbackTarget
             ?: orderedDetailEpisodes(media.episodes).firstOrNull()
@@ -240,14 +250,18 @@ fun TvDetailScreen(
                     movieWatched = runtime.readDetailLibrary { runtime.libraryStore.isMarkedWatched(shell) },
                     history = runtime.readDetailLibrary { runtime.libraryStore.history() },
                     playbackEntries = runtime.readDetailLibrary { runtime.libraryStore.continueWatchingPlaybackEntries() },
+                    watchedEpisodeKeys = runtime.readDetailLibrary { runtime.libraryStore.watchedEpisodeKeys() },
                 )
             }
             if (!sessionCurrent()) return@launch
             watchlisted = watchlistUserOverride ?: snapshot.watchlisted
             movieWatched = snapshot.movieWatched
-            history = snapshot.history
-            playbackEntries = snapshot.playbackEntries
-            syncEpisodeSelection(item, entries = snapshot.playbackEntries, preserveCurrent = true)
+            if (!episodeManagementChanged) {
+                history = snapshot.history
+                playbackEntries = snapshot.playbackEntries
+                watchedEpisodeKeys = snapshot.watchedEpisodeKeys
+                syncEpisodeSelection(item, entries = snapshot.playbackEntries, preserveCurrent = true)
+            }
         }
 
         // Identity resolution, addon metadata response parsing and episode
@@ -380,9 +394,9 @@ fun TvDetailScreen(
     }
 
     // `history` is hydrated off-main above and retained as Compose state.
-    val playbackEntry = remember(item.id, item.type, selectedEpisode?.id, history, initialLibraryEntry) {
+    val playbackEntry = remember(item.id, item.type, selectedEpisode?.id, history, effectiveInitialEntry) {
         detailPlaybackEntry(item, selectedEpisode, history)
-            ?: detailInitialPlaybackEntry(item, selectedEpisode, initialLibraryEntry)
+            ?: detailInitialPlaybackEntry(item, selectedEpisode, effectiveInitialEntry)
     }
     val seasons = remember(item.episodes) {
         val regular = item.episodes.map(EpisodeItem::season).distinct().filter { it > 0 }.sorted()
@@ -434,6 +448,7 @@ fun TvDetailScreen(
                 episodes = episodesForSeason,
                 selectedEpisode = selectedEpisode,
                 history = history,
+                watchedEpisodeKeys = watchedEpisodeKeys,
                 playbackEntry = playbackEntry,
                 related = related,
                 tmdbMoreLikeThisEnabled = tmdbMoreLikeThisEnabled,
@@ -441,7 +456,7 @@ fun TvDetailScreen(
             ),
             onPlay = {
                 val seriesNeedsEpisode = item.isDetailSeries() && item.episodes.isNotEmpty()
-                if (!seriesNeedsEpisode || selectedEpisode != null) {
+                if (!episodeManagementBusy && (!seriesNeedsEpisode || selectedEpisode != null)) {
                     val startPositionMs = playbackEntry?.takeIf(::detailCanResume)?.positionMs ?: 0L
                     onWatch(item, selectedEpisode, startPositionMs)
                 }
@@ -478,14 +493,46 @@ fun TvDetailScreen(
                 VueoDetailFocusMemory.selectedSeason = episode.season
                 VueoDetailFocusMemory.episodeId = episode.id
             },
-            onEpisodeSelected = { episode ->
+            onManageEpisodes = { targets, watched ->
+                if (!episodeManagementBusy && runtime.profileStore.activeProfileId() == episodeManagementProfile) {
+                    val targetMedia = item
+                    episodeManagementBusy = true
+                    episodeManagementChanged = true
+                    episodeManagementScope.launch {
+                        try {
+                            val snapshot = runtime.readDetailLibrary {
+                                if (runtime.profileStore.activeProfileId() != episodeManagementProfile) null else {
+                                    val store = com.vueo.shared.core.storage.LibraryStore(episodeManagementContext,
+                                        profileStore = runtime.profileStore, profileIdOverride = episodeManagementProfile)
+                                    store.setEpisodesWatched(targetMedia, targets, watched)
+                                    store.detailSnapshot()
+                                }
+                            }
+                            if (snapshot != null && runtime.profileStore.activeProfileId() == episodeManagementProfile) {
+                                history = snapshot.history
+                                playbackEntries = snapshot.playbackEntries
+                                watchedEpisodeKeys = snapshot.watchedEpisodeKeys
+                                onLibraryChanged()
+                            }
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            android.widget.Toast.makeText(episodeManagementContext, "Couldn't update watched status. Try again.", android.widget.Toast.LENGTH_SHORT).show()
+                        } finally {
+                            episodeManagementBusy = false
+                        }
+                    }
+                }
+            },
+            onEpisodeSelected = select@{ episode ->
+                if (episodeManagementBusy) return@select
                 episodeSelectionTouchedByUser = true
                 selectedSeason = episode.season
                 selectedEpisode = episode
                 VueoDetailFocusMemory.selectedSeason = episode.season
                 VueoDetailFocusMemory.episodeId = episode.id
                 val episodeEntry = detailPlaybackEntry(item, episode, history)
-                    ?: detailInitialPlaybackEntry(item, episode, initialLibraryEntry)
+                    ?: detailInitialPlaybackEntry(item, episode, effectiveInitialEntry)
                 val startPositionMs = episodeEntry?.takeIf(::detailCanResume)?.positionMs ?: 0L
                 onWatch(item, episode, startPositionMs)
             },
@@ -510,6 +557,7 @@ internal data class TvDetailPresentationState(
     val episodes: List<EpisodeItem>,
     val selectedEpisode: EpisodeItem?,
     val history: List<LibraryPlaybackEntry>,
+    val watchedEpisodeKeys: Set<String>,
     val playbackEntry: LibraryPlaybackEntry?,
     val related: List<MediaItem>,
     val tmdbMoreLikeThisEnabled: Boolean,
@@ -532,7 +580,8 @@ private fun detailPlaybackTargetEpisode(
     media: MediaItem,
     entries: List<LibraryPlaybackEntry>,
     initialEntry: LibraryPlaybackEntry?,
-): EpisodeItem? = ContinueWatchingPolicy.targetEpisode(media, entries, initialEntry)
+    watchedEpisodes: Set<String> = emptySet(),
+): EpisodeItem? = ContinueWatchingPolicy.targetEpisode(media, entries, initialEntry, watchedEpisodes)
 
 internal fun detailPlaybackEntry(
     media: MediaItem,
