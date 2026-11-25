@@ -1,5 +1,15 @@
 package com.vueo.tv.settings
 
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.WindowInsets
+import com.vueo.tv.ui.rememberTvOkToEdit
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.Icons
 import androidx.compose.ui.text.input.VisualTransformation
 import com.vueo.tv.ui.TvDialogButton
 import com.vueo.tv.ui.TvThemedDialog
@@ -1584,6 +1594,43 @@ internal fun rememberTvSettingsDeferredFocusRestore(): () -> Unit {
 }
 
 @Composable
+internal fun TvSecretVisibilityButton(
+    visible: Boolean,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onFocus: (Boolean) -> Unit,
+    onToggle: () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    IconButton(
+        onClick = onToggle,
+        enabled = enabled,
+        modifier = modifier
+            .size(44.dp)
+            .onFocusChanged {
+                focused = it.isFocused
+                onFocus(it.isFocused)
+            }
+            .background(
+                if (focused) TvDesign.White.copy(alpha = .12f) else Color.Transparent,
+                CircleShape,
+            )
+            .border(
+                if (focused) 2.dp else 0.dp,
+                if (focused) TvDesign.White else Color.Transparent,
+                CircleShape,
+            ),
+    ) {
+        Icon(
+            imageVector = if (visible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+            contentDescription = if (visible) "Hide value" else "Show value",
+            tint = if (focused) TvDesign.White else TvDesign.Muted,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
+@Composable
 internal fun TvTextEntryDialog(
     title: String,
     initialValue: String,
@@ -1594,7 +1641,7 @@ internal fun TvTextEntryDialog(
     busyLabel: String = "Working…",
     message: String? = null,
     restoreOnSave: Boolean = true,
-    allowSecretReveal: Boolean = false,
+    allowSecretReveal: Boolean = true,
     onDismiss: () -> Unit,
     onSave: (String) -> Unit,
 ) {
@@ -1618,6 +1665,11 @@ internal fun TvTextEntryDialog(
     val cancelFocus = remember { FocusRequester() }
     val saveFocus = remember { FocusRequester() }
     val showReveal = secret && allowSecretReveal
+    var revealFocused by remember { mutableStateOf(false) }
+    val revealKeyboard = LocalSoftwareKeyboardController.current
+    val secretImeInsets = WindowInsets.ime
+    val secretDensity = LocalDensity.current
+    val secretEditor = rememberTvOkToEdit(enabled = !busy && !revealFocused)
     val canSave = !busy && value.isNotBlank()
 
     TvThemedDialog(title, inputFocus, ::dismissAndRestore, dismissOnBackPress = !busy) {
@@ -1627,9 +1679,39 @@ internal fun TvTextEntryDialog(
             onValueChange = { value = it },
             enabled = !busy,
             singleLine = true,
-            modifier = Modifier.fillMaxWidth().focusRequester(inputFocus).focusProperties {
-                down = if (showReveal) revealFocus else cancelFocus
-            },
+            readOnly = secret && secretEditor.readOnly,
+            modifier = Modifier.fillMaxWidth().focusRequester(inputFocus)
+                .focusProperties { down = cancelFocus }
+                .onPreviewKeyEvent { event ->
+                    if (showReveal && !busy && !revealFocused &&
+                        (secretEditor.readOnly || secretImeInsets.getBottom(secretDensity) == 0) &&
+                        event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+                    ) {
+                        if (event.type == KeyEventType.KeyDown) revealFocus.requestFocus()
+                        true
+                    } else false
+                }
+                .then(if (secret) secretEditor.modifier else Modifier),
+            keyboardOptions = if (secret) {
+                KeyboardOptions(keyboardType = KeyboardType.Password, showKeyboardOnFocus = false)
+            } else KeyboardOptions.Default,
+            trailingIcon = if (showReveal) {
+                {
+                    TvSecretVisibilityButton(
+                        visible = secretVisible,
+                        enabled = !busy,
+                        modifier = Modifier.focusRequester(revealFocus).focusProperties {
+                            left = inputFocus
+                            down = cancelFocus
+                        },
+                        onFocus = {
+                            revealFocused = it
+                            if (it) revealKeyboard?.hide()
+                        },
+                        onToggle = { secretVisible = !secretVisible },
+                    )
+                }
+            } else null,
             placeholder = { if (placeholder.isNotBlank()) Text(placeholder, color = TvDesign.Dim) },
             textStyle = LocalTextStyle.current.copy(fontSize = 14.sp),
             visualTransformation = if (secret && !secretVisible) {
@@ -1640,23 +1722,12 @@ internal fun TvTextEntryDialog(
             shape = RoundedCornerShape(12.dp),
             colors = tvDialogInputColors(),
         )
-        if (showReveal) {
-            TvDialogButton(
-                label = if (secretVisible) "Hide API key" else "Show API key",
-                enabled = !busy,
-                modifier = Modifier.focusRequester(revealFocus).focusProperties {
-                    up = inputFocus
-                    down = cancelFocus
-                },
-                onClick = { secretVisible = !secretVisible },
-            )
-        }
         message?.takeIf { it.isNotBlank() }?.let {
             Text(it, color = TvDesign.Muted, fontSize = 12.sp)
         }
         if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = TvDesign.White)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)) {
-            val above = if (showReveal) revealFocus else inputFocus
+            val above = inputFocus
             TvDialogButton(
                 label = "Cancel",
                 enabled = !busy,
