@@ -28,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableStateOf
@@ -210,19 +211,27 @@ internal fun TvDetailPresentation(
         else -> playRequester
     }
 
-    val backdropScrolled = listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 190
+    // Recompose only when crossing the dimming threshold, not on every scroll pixel.
+    val backdropScrolled by remember(listState) {
+        derivedStateOf {
+            listState.firstVisibleItemIndex > 0 ||
+                (listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == 0 }?.let {
+                    listState.firstVisibleItemScrollOffset > it.size * .16f
+                } ?: false)
+        }
+    }
     val backdropAlpha by animateFloatAsState(
-        targetValue = if (backdropScrolled) .55f else 1f,
+        targetValue = if (backdropScrolled) .34f else 1f,
         animationSpec = tvTunedSpec(TvMotionGroup.HERO, !backdropScrolled, tween(
-            durationMillis = if (backdropScrolled) 180 else TvMotion.BACKDROP_MS,
+            durationMillis = if (backdropScrolled) 260 else TvMotion.BACKDROP_MS,
             easing = if (backdropScrolled) TvMotion.EaseInOut else TvMotion.EaseOut,
         )),
         label = "detail39BackdropAlpha",
     )
     val scrimAlpha by animateFloatAsState(
-        targetValue = 1f,
+        targetValue = if (backdropScrolled) 1f else .97f,
         animationSpec = tvTunedSpec(TvMotionGroup.HERO, !backdropScrolled, tween(
-            durationMillis = if (backdropScrolled) 180 else TvMotion.BACKDROP_MS,
+            durationMillis = if (backdropScrolled) 260 else TvMotion.BACKDROP_MS,
             easing = if (backdropScrolled) TvMotion.EaseInOut else TvMotion.EaseOut,
         )),
         label = "detail39ScrimAlpha",

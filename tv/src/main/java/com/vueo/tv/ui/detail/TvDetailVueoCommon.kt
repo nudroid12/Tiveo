@@ -63,9 +63,9 @@ internal fun VueoDetailBackdrop(
                 .background(
                     Brush.horizontalGradient(
                         0f to TvDesign.Black.copy(alpha = .97f),
-                        .23f to TvDesign.Black.copy(alpha = .87f),
-                        .47f to TvDesign.Black.copy(alpha = .52f),
-                        .72f to TvDesign.Black.copy(alpha = .12f),
+                        .27f to TvDesign.Black.copy(alpha = .90f),
+                        .48f to TvDesign.Black.copy(alpha = .71f),
+                        .70f to TvDesign.Black.copy(alpha = .14f),
                         1f to Color.Transparent,
                     )
                 )
@@ -73,7 +73,7 @@ internal fun VueoDetailBackdrop(
                     Brush.verticalGradient(
                         0f to Color.Transparent,
                         .44f to Color.Transparent,
-                        .72f to TvDesign.Black.copy(alpha = .38f),
+                        .78f to TvDesign.Black.copy(alpha = .30f),
                         1f to TvDesign.Black.copy(alpha = .94f),
                     )
                 ),
@@ -86,9 +86,9 @@ internal fun VueoDetailSectionTitle(title: String) {
     Text(
         text = title,
         color = TvDesign.White,
-        fontSize = 19.sp,
-        lineHeight = 22.sp,
-        fontWeight = FontWeight.Medium,
+        fontSize = 20.sp,
+        lineHeight = 25.sp,
+        fontWeight = FontWeight.SemiBold,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.padding(horizontal = VueoDetailHorizontalPadding),

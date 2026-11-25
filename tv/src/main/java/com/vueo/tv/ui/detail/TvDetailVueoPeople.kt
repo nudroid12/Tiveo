@@ -749,7 +749,7 @@ private fun VueoCompanyCard(
 
 
 private enum class VueoCompanyTab(val label: String) {
-    CAST("Cast"), PRODUCTION("Production"), NETWORK("Network"),
+    CAST("Cast & Crew"), PRODUCTION("Production"), NETWORK("Network"),
 }
 
 /** One stable content area for the three requested tabs. */
@@ -820,9 +820,9 @@ TvTabMarkerHost {
                 Text(
                     text = tab.label,
                     color = if (focused || active == tab) TvDesign.White else TvDesign.White.copy(alpha = .58f),
-                    fontSize = 19.sp,
-                    lineHeight = 22.sp,
-                    fontWeight = if (active == tab) FontWeight.Medium else FontWeight.Normal,
+                    fontSize = 20.sp,
+                    lineHeight = 25.sp,
+                    fontWeight = if (active == tab) FontWeight.SemiBold else FontWeight.Normal,
                     modifier = Modifier.tvTabMarker(active == tab)
                         .focusRequester(tabRequesters.getValue(tab))
                         .focusProperties {
@@ -876,7 +876,7 @@ TvTabMarkerHost {
                         .padding(vertical = 4.dp),
                 )
                 if (index < available.lastIndex) {
-                    Box(Modifier.width(1.dp).height(27.dp).background(TvDesign.White.copy(alpha = .48f)))
+                    Spacer(Modifier.width(8.dp))
                 }
             }
         }
