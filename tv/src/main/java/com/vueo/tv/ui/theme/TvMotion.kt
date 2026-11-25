@@ -33,9 +33,9 @@ internal object TvMotion {
     const val PANEL_OUT_MS = 125
     const val SCREEN_IN_MS = 175
     const val SCREEN_OUT_MS = 128
-    const val TAB_IN_MS = 170
-    const val TAB_OUT_MS = 130
-    const val TAB_OUT_DELAY_MS = 40
+    const val TAB_IN_MS = 250
+    const val TAB_OUT_MS = 200
+    const val TAB_OUT_DELAY_MS = 0
     const val BACKDROP_MS = 270
 
     val EaseOut = CubicBezierEasing(0.22f, 0.61f, 0.36f, 1f)
