@@ -1,5 +1,11 @@
 package com.vueo.tv.home
 
+import com.vueo.shared.core.diagnostics.PerformanceDiagnostics
+import com.vueo.tv.ui.motion.tvTunedSpec
+import com.vueo.tv.ui.motion.TvMotionGroup
+import com.vueo.tv.ui.motion.TvMotion
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,7 +21,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntSize
@@ -56,42 +64,45 @@ internal fun TvHomePresentation(
     // NuvioTV 0.8.3-beta: successive item changes in the same row within
     // 300ms are rapid horizontal navigation. Keep the last committed hero
     // visible until the focus has settled; do not change the row's scroll.
-    var lastFocusedRowKey by remember { mutableStateOf<String?>(null) }
+    var lastFocusedRowKey by remember {
+        mutableStateOf(routeFocusAnchor?.rowKey ?: TvHomeFocusMemory.activeRowKey)
+    }
     var rapidHorizontalNavigation by remember { mutableStateOf(false) }
     // Nuvio stable-hero policy: do not replace backdrop/copy while the user is
     // holding Up/Down or the vertical LazyColumn is actively scrolling.
     var verticalMotionActive by remember { mutableStateOf(false) }
     val context = LocalContext.current.applicationContext
     val density = LocalDensity.current
-    val logoSize = with(density) { IntSize(220.dp.roundToPx(), 100.dp.roundToPx()) }
+    val logoSize = with(density) {
+        IntSize(MODERN_HOME_LOGO_WIDTH.roundToPx(), MODERN_HOME_LOGO_HEIGHT.roundToPx())
+    }
     val contentStartPadding = MODERN_HOME_CONTENT_START_PADDING
+    val rowsViewportFraction = MODERN_HOME_ROWS_VIEWPORT_FRACTION
 
     LaunchedEffect(rows) {
         val currentKey = focusedEntry?.key
-        val currentStillAvailable =
-            currentKey != null &&
-                rows.any { row -> row.entries.any { entry -> entry.key == currentKey } }
-
-        // Progressive catalog updates only append rows. Keep the current TV
-        // focus/hero untouched unless the focused item genuinely disappeared.
-        if (currentStillAvailable) return@LaunchedEffect
-
-        val savedRowKey = TvHomeFocusMemory.activeRowKey
-        val savedRow = rows.firstOrNull { it.key == savedRowKey }
-        val initial = if (savedRow != null) {
-            val index = (TvHomeFocusMemory.focusedIndexByRow[savedRow.key] ?: 0)
-                .coerceIn(0, savedRow.entries.lastIndex)
-            savedRow.entries[index]
-        } else {
-            rows.firstNotNullOfOrNull { it.entries.firstOrNull() }
+        val currentRow = rows.firstOrNull { it.key == lastFocusedRowKey && it.entries.isNotEmpty() }
+        // Keep the committed hero and row through progressive catalog updates.
+        if (currentKey != null && currentRow?.entries?.any { it.key == currentKey } == true) {
+            return@LaunchedEffect
         }
-        focusedEntry = initial
+
+        val savedRowKey = routeFocusAnchor?.rowKey ?: TvHomeFocusMemory.activeRowKey
+        val initialRow = currentRow
+            ?: rows.firstOrNull { it.key == savedRowKey && it.entries.isNotEmpty() }
+            ?: rows.firstOrNull { it.entries.isNotEmpty() }
+        lastFocusedRowKey = initialRow?.key
+        focusedEntry = initialRow?.let { row ->
+            val index = (TvHomeFocusMemory.focusedIndexByRow[row.key] ?: 0)
+                .coerceIn(0, row.entries.lastIndex)
+            row.entries[index]
+        }
     }
 
     // NuvioTV 0.8.3-beta style horizontal settle detector. Re-keying the
     // effect cancels an earlier settle, so holding Left/Right never commits
     // a stream of intermediate heroes. Slow single presses are unaffected.
-    LaunchedEffect(focusedEntry?.key, lastNavigationAt) {
+    LaunchedEffect(lastFocusedRowKey, focusedEntry?.key, lastNavigationAt) {
         if (!rapidHorizontalNavigation) return@LaunchedEffect
         delay(settledHeroDelayMs)
         rapidHorizontalNavigation = false
@@ -100,7 +111,7 @@ internal fun TvHomePresentation(
     // Preserve the previous scene during rapid horizontal navigation and
     // vertical scroll. Once focus stops, finish the *remaining* debounce
     // rather than waiting twice (first for rapid mode, then for hero load).
-    LaunchedEffect(focusedEntry?.key, artworkApiKey, verticalMotionActive, rapidHorizontalNavigation) {
+    LaunchedEffect(lastFocusedRowKey, focusedEntry?.key, artworkApiKey, verticalMotionActive, rapidHorizontalNavigation) {
         val next = focusedEntry ?: return@LaunchedEffect
         if (next is TvHomeEntry.Folder) return@LaunchedEffect
         if (verticalMotionActive || (rapidHorizontalNavigation && heroScene != null)) {
@@ -129,11 +140,12 @@ internal fun TvHomePresentation(
     // Preload one adjacent item only after Home has had time to paint the
     // focused hero. This stays best-effort and cancellable so optional artwork
     // work cannot compete with cold-start first-frame rendering.
-    LaunchedEffect(focusedEntry?.key, artworkApiKey, rows, verticalMotionActive, rapidHorizontalNavigation) {
+    LaunchedEffect(lastFocusedRowKey, focusedEntry?.key, artworkApiKey, rows, verticalMotionActive, rapidHorizontalNavigation) {
         if (verticalMotionActive || rapidHorizontalNavigation) return@LaunchedEffect
         val selected = focusedEntry ?: return@LaunchedEffect
         if (selected is TvHomeEntry.Folder) return@LaunchedEffect
-        val row = rows.firstOrNull { it.entries.any { item -> item.key == selected.key } }
+        val row = rows.firstOrNull { it.key == lastFocusedRowKey && it.entries.any { item -> item.key == selected.key } }
+            ?: rows.firstOrNull { it.entries.any { item -> item.key == selected.key } }
             ?: return@LaunchedEffect
         val index = row.entries.indexOfFirst { it.key == selected.key }
         val adjacent = row.entries.getOrNull(index + 1) ?: row.entries.getOrNull(index - 1)
@@ -159,15 +171,70 @@ internal fun TvHomePresentation(
             .background(TvDesign.Black),
     ) {
         val screenHeight = maxHeight
-        val rowsViewportHeight = screenHeight * MODERN_HOME_ROWS_VIEWPORT_FRACTION
+        // Only a committed row controls geometry. Opening navigation or moving
+        // horizontally in that row cannot change the viewport height.
+        val activeRowKind = rows.firstOrNull { it.key == lastFocusedRowKey && it.entries.isNotEmpty() }?.kind
+            ?: rows.firstOrNull { it.key == routeFocusAnchor?.rowKey && it.entries.isNotEmpty() }?.kind
+            ?: rows.firstOrNull { it.entries.isNotEmpty() }?.kind
+            ?: TvHomeRowKind.POSTERS
+        val portraitContentHeight = TvHomeRowKind.POSTERS.homeRowContentHeight(density)
+        val portraitRowsHeight = maxOf(
+            screenHeight * rowsViewportFraction,
+            portraitContentHeight + 4.dp,
+        ).coerceAtMost(screenHeight * .52f)
+
+        // Preserve the portrait row's bottom margin for the shorter landscape
+        // row, using the real card height and focus inset for each row kind.
+        fun viewportHeightFor(kind: TvHomeRowKind): Dp {
+            val rowContentHeight = kind.homeRowContentHeight(density)
+            val contentHeightDifference = (portraitContentHeight - rowContentHeight).coerceAtLeast(0.dp)
+            val minimumRowsHeight = (rowContentHeight + 4.dp).coerceAtMost(portraitRowsHeight)
+            return (portraitRowsHeight - contentHeightDifference).coerceAtLeast(minimumRowsHeight)
+        }
+
+        val targetRowsHeight = viewportHeightFor(activeRowKind)
+        val shortestRowsHeight = minOf(
+            viewportHeightFor(TvHomeRowKind.CONTINUE_WATCHING),
+            viewportHeightFor(TvHomeRowKind.COLLECTIONS),
+        )
+        val animatedRowsHeight by animateDpAsState(
+            targetValue = targetRowsHeight,
+            animationSpec = tvTunedSpec(
+                TvMotionGroup.TOPBAR,
+                activeRowKind != TvHomeRowKind.POSTERS,
+                tween(durationMillis = 280, easing = TvMotion.EaseInOut),
+            ),
+            label = "homeAdaptiveRowsViewport",
+        )
+        val rowsViewportHeight = animatedRowsHeight.coerceIn(shortestRowsHeight, portraitRowsHeight)
         val heroHeight = (screenHeight - rowsViewportHeight + 38.dp).coerceAtMost(screenHeight)
+        val largestHeroHeight = (screenHeight - shortestRowsHeight + 38.dp).coerceAtMost(screenHeight)
+
+        // Keep the enlarged logo under the top navigation on compact displays,
+        // with enough room below it for the metadata and three synopsis lines.
+        val copyTopClearance = TiveoTopBarHeight + 4.dp
+        val copyTextHeight = with(density) { 19.sp.toDp() * 2f + 21.sp.toDp() * 3f } + 18.dp
+        val logoHeight = (
+            screenHeight - portraitRowsHeight - MODERN_HOME_HERO_COPY_BOTTOM_GAP -
+                copyTopClearance - copyTextHeight
+        ).coerceIn(48.dp, MODERN_HOME_LOGO_HEIGHT)
+
+        LaunchedEffect(activeRowKind, targetRowsHeight, navigationVisible) {
+            if (PerformanceDiagnostics.isCollecting() && screenHeight > 0.dp) {
+                PerformanceDiagnostics.captureRuntimeEvent(
+                    "HOME_VIEWPORT_TARGET rowKind=$activeRowKind navigation=$navigationVisible " +
+                        "target=${targetRowsHeight / screenHeight}",
+                )
+            }
+        }
 
         TvModernHomeHero(
             scene = heroScene,
             heroHeight = heroHeight,
             rowsViewportHeight = rowsViewportHeight,
-            stableHeroHeight = heroHeight,
-            stableRowsViewportHeight = rowsViewportHeight,
+            stableHeroHeight = largestHeroHeight,
+            stableRowsViewportHeight = portraitRowsHeight,
+            logoHeight = logoHeight,
         )
 
         when {
@@ -175,7 +242,6 @@ internal fun TvHomePresentation(
                 TvModernHomeRows(
                     rows = rows,
                     rowsViewportHeight = rowsViewportHeight,
-                    showContinueWatchingPreview = false,
                     contentFocusRequester = contentFocusRequester,
                     focusResetToken = focusResetToken,
                     contentReturnToken = contentReturnToken,
@@ -193,17 +259,17 @@ internal fun TvHomePresentation(
                     onFocused = { row, index, entry ->
                         TvHomeFocusMemory.activeRowKey = row.key
                         TvHomeFocusMemory.focusedIndexByRow[row.key] = index
-                        if (focusedEntry?.key != entry.key) {
+                        val sameRow = lastFocusedRowKey == row.key
+                        if (!sameRow || focusedEntry?.key != entry.key) {
                             val now = SystemClock.uptimeMillis()
-                            val sameRow = lastFocusedRowKey == row.key
                             val rapidInterval = lastNavigationAt != 0L &&
                                 now - lastNavigationAt in 1L..300L
                             // Up/Down switches rows: do not misclassify those
                             // focus restorations as horizontal fast navigation.
                             rapidHorizontalNavigation = sameRow && rapidInterval
-                            lastFocusedRowKey = row.key
                             lastNavigationAt = now
                         }
+                        lastFocusedRowKey = row.key
                         focusedEntry = entry
                     },
                     onOpen = onOpen,
