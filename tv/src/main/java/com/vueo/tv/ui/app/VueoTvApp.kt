@@ -204,7 +204,7 @@ fun VueoTvApp(
     // Normal Home -> Details navigation keeps its retained-parent behavior.
     var detailReturnedFromSource by remember { mutableStateOf(false) }
     var playerReturnRoute by remember { mutableStateOf(TvRoute.SOURCE) }
-    val searchSession = remember { TvSearchSession() }
+    val searchSession = remember(runtime.profileStore.activeProfileId(), runtime.profileStore.kidsAgeLimit()) { TvSearchSession() }
     val topBar = remember { TiveoTopBarState() }
     val sourceDiscoveryScope = rememberCoroutineScope()
     val backgroundFocus = remember { FocusRequester() }
