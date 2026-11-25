@@ -1,9 +1,9 @@
 package com.vueo.tv.search
 
+import com.vueo.shared.core.search.SearchPolicy
+import com.vueo.tv.ui.TvPosterGridReveal
 import com.vueo.tv.ui.motion.*
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -46,7 +46,6 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -63,7 +62,6 @@ import com.vueo.shared.core.search.SearchOrchestrator
 import com.vueo.tv.core.TvRuntime
 import com.vueo.tv.ui.TvDesign
 import com.vueo.tv.ui.TvNetworkImage
-import com.vueo.tv.ui.motion.TvMotion
 import kotlinx.coroutines.delay
 
 private const val ENTITY_COLUMNS = 6
@@ -254,7 +252,8 @@ internal fun TvEntityResultsScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 68.dp, end = 52.dp, top = 34.dp, bottom = 18.dp),
+                .padding(start = 60.dp, end = 60.dp, top = 24.dp, bottom = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(20.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
@@ -268,66 +267,63 @@ internal fun TvEntityResultsScreen(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = when (target.kind) {
-                        MediaEntityKind.ACTOR -> "Cast titles"
-                        MediaEntityKind.COMPANY -> "Production titles"
-                        MediaEntityKind.NETWORK -> "Network titles"
+                    text = when {
+                        busy -> "Loading…"
+                        else -> "${orderedResults.size} titles · " + when (target.kind) {
+                            MediaEntityKind.ACTOR -> "Cast titles"
+                            MediaEntityKind.COMPANY -> "Production titles"
+                            MediaEntityKind.NETWORK -> "Network titles"
+                        }
                     },
                     color = TvDesign.Muted,
                     fontSize = 12.sp,
                 )
-                Spacer(Modifier.height(12.dp))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    TvEntitySortTab(
-                        label = "Newest",
-                        selected = resultOrder == EntityResultOrder.NEWEST,
-                        requester = newestRequester,
-                        leftRequester = FocusRequester.Cancel,
-                        rightRequester = popularRequester,
-                        downRequester = firstRequester,
-                        onDown = { enterGridPending = true },
-                        onFocusChanged = {
-                            newestFocused = it
-                            if (it) {
-                                enterGridPending = false
-                                resultOrder = EntityResultOrder.NEWEST
-                            }
-                        },
-                        onClick = { resultOrder = EntityResultOrder.NEWEST },
-                    )
-                    TvEntitySortTab(
-                        label = "Popular",
-                        selected = resultOrder == EntityResultOrder.POPULAR,
-                        requester = popularRequester,
-                        leftRequester = newestRequester,
-                        rightRequester = FocusRequester.Cancel,
-                        downRequester = firstRequester,
-                        onDown = { enterGridPending = true },
-                        onFocusChanged = {
-                            popularFocused = it
-                            if (it) {
-                                enterGridPending = false
-                                resultOrder = EntityResultOrder.POPULAR
-                            }
-                        },
-                        onClick = { resultOrder = EntityResultOrder.POPULAR },
-                    )
-                }
             }
-            Text(
-                text = if (busy) "Loading…" else "${orderedResults.size} titles",
-                color = TvDesign.Muted,
-                fontSize = 11.sp,
-            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TvEntitySortTab(
+                    label = "Newest",
+                    selected = resultOrder == EntityResultOrder.NEWEST,
+                    requester = newestRequester,
+                    leftRequester = FocusRequester.Cancel,
+                    rightRequester = popularRequester,
+                    downRequester = firstRequester,
+                    onDown = { enterGridPending = true },
+                    onFocusChanged = {
+                        newestFocused = it
+                        if (it) {
+                            enterGridPending = false
+                            resultOrder = EntityResultOrder.NEWEST
+                        }
+                    },
+                    onClick = { resultOrder = EntityResultOrder.NEWEST },
+                )
+                TvEntitySortTab(
+                    label = "Popular",
+                    selected = resultOrder == EntityResultOrder.POPULAR,
+                    requester = popularRequester,
+                    leftRequester = newestRequester,
+                    rightRequester = FocusRequester.Cancel,
+                    downRequester = firstRequester,
+                    onDown = { enterGridPending = true },
+                    onFocusChanged = {
+                        popularFocused = it
+                        if (it) {
+                            enterGridPending = false
+                            resultOrder = EntityResultOrder.POPULAR
+                        }
+                    },
+                    onClick = { resultOrder = EntityResultOrder.POPULAR },
+                )
+            }
         }
 
         if (failed) {
             androidx.compose.material3.TextButton(
                 onClick = { retryGeneration++ },
-                modifier = Modifier.padding(horizontal = 68.dp),
+                modifier = Modifier.padding(horizontal = 60.dp),
             ) {
                 Text("Couldn't load all titles. Retry", color = TvDesign.White)
             }
@@ -335,40 +331,45 @@ internal fun TvEntityResultsScreen(
 
         when {
             orderedResults.isNotEmpty() -> {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(ENTITY_COLUMNS),
-                    state = gridState,
-                    modifier = Modifier.fillMaxSize()
-                        .onFocusChanged { gridHasFocus = it.hasFocus }
-                        .focusGroup(),
-                    contentPadding = PaddingValues(
-                        start = 68.dp,
-                        end = 52.dp,
-                        top = 4.dp,
-                        bottom = 36.dp,
-                    ),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(18.dp),
-                ) {
-                    itemsIndexed(
-                        items = orderedResults,
-                        key = { _, item -> "${target.kind}:${item.type}:${item.id}" },
-                    ) { index, item ->
-                        val mediaKey = "${item.type}:${item.id}"
-                        TvEntityPosterTile(
-                            item = item,
-                            requester = requesters.getValue(mediaKey),
-                            upRequester = if (index < ENTITY_COLUMNS) {
-                                selectedOrderRequester
-                            } else {
-                                null
-                            },
-                            onFocused = { focusedMediaKey = mediaKey },
-                            onClick = {
-                                focusedMediaKey = mediaKey
-                                onOpenMedia(item)
-                            },
-                        )
+                TvPosterGridReveal {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(ENTITY_COLUMNS),
+                        state = gridState,
+                        modifier = Modifier.fillMaxSize()
+                            .onFocusChanged { gridHasFocus = it.hasFocus }
+                            .focusGroup(),
+                        contentPadding = PaddingValues(
+                            start = 60.dp,
+                            end = 60.dp,
+                            top = 4.dp,
+                            bottom = 36.dp,
+                        ),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(18.dp),
+                    ) {
+                        itemsIndexed(
+                            items = orderedResults,
+                            key = { _, item -> "${target.kind}:${item.type}:${item.id}" },
+                        ) { index, item ->
+                            val mediaKey = "${item.type}:${item.id}"
+                            TvEntityPosterTile(
+                                item = item,
+                                requester = requesters.getValue(mediaKey),
+                                upRequester = if (index < ENTITY_COLUMNS) {
+                                    selectedOrderRequester
+                                } else {
+                                    null
+                                },
+                                blockLeft = index % ENTITY_COLUMNS == 0,
+                                blockRight = index % ENTITY_COLUMNS == ENTITY_COLUMNS - 1 ||
+                                    index == orderedResults.lastIndex,
+                                onFocused = { focusedMediaKey = mediaKey },
+                                onClick = {
+                                    focusedMediaKey = mediaKey
+                                    onOpenMedia(item)
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -471,28 +472,19 @@ private fun TvEntityPosterTile(
     item: MediaItem,
     requester: FocusRequester,
     upRequester: FocusRequester? = null,
+    blockLeft: Boolean,
+    blockRight: Boolean,
     onFocused: () -> Unit,
     onClick: () -> Unit,
 ) {
     var focused by remember(item.id, item.type) { mutableStateOf(false) }
-    val scale by animateFloatAsState(
-        targetValue = if (focused) tvTunedFocusScale(1.035f) else 1f,
-        animationSpec = tvTunedSpec(TvMotionGroup.FOCUS, focused, tween(
-            durationMillis = if (focused) TvMotion.FOCUS_IN_MS else TvMotion.FOCUS_OUT_MS,
-            easing = TvMotion.EaseOut,
-        )),
-        label = "entityPosterScale",
-    )
 
     Column(
         modifier = Modifier
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-                shadowElevation = if (focused) 8.dp.toPx() else 0f
-            }
             .focusRequester(requester)
             .focusProperties {
+                if (blockLeft) left = FocusRequester.Cancel
+                if (blockRight) right = FocusRequester.Cancel
                 if (upRequester != null) {
                     up = upRequester
                 }
@@ -501,8 +493,7 @@ private fun TvEntityPosterTile(
                 focused = state.isFocused
                 if (state.isFocused) onFocused()
             }
-            .clickable(onClick = onClick)
-            .focusable(),
+            .clickable(onClick = onClick),
     ) {
         TvNetworkImage(
             url = item.poster,
@@ -523,18 +514,18 @@ private fun TvEntityPosterTile(
             color = TvDesign.White,
             fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold,
+            minLines = 2,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
-        item.releaseInfo?.takeIf { it.isNotBlank() }?.let { release ->
-            Spacer(Modifier.height(2.dp))
-            Text(
-                text = release,
-                color = TvDesign.Muted,
-                fontSize = 10.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = SearchPolicy.releaseYear(item).takeIf { it > 0 }?.toString()
+                ?: item.releaseInfo.orEmpty(),
+            color = TvDesign.Muted,
+            fontSize = 10.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }

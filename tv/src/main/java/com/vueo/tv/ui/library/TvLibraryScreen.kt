@@ -1,5 +1,6 @@
 package com.vueo.tv.library
 
+import com.vueo.tv.ui.TvPosterGridReveal
 import com.vueo.tv.ui.motion.*
 import android.content.Context
 import com.vueo.shared.core.diagnostics.PerformanceDiagnostics
@@ -238,11 +239,9 @@ internal fun TvLibraryScreen(
             val mediaIndex = key?.let(mediaKeys::indexOf)?.takeIf { it >= 0 }
             val requester = key?.let(mediaRequesters::get)
             if (mediaIndex != null && requester != null) {
-                if (
-                    TvLibraryFocusMemory.firstVisibleItemIndex == 0 &&
-                    TvLibraryFocusMemory.firstVisibleItemScrollOffset == 0
-                ) {
-                    runCatching { gridState.scrollToItem(mediaIndex + LIBRARY_HEADER_ITEMS) }
+                val gridIndex = mediaIndex + LIBRARY_HEADER_ITEMS
+                if (gridState.layoutInfo.visibleItemsInfo.none { it.index == gridIndex }) {
+                    gridState.scrollToItem(gridIndex)
                 }
                 if (topBar.hasFocus) return@LaunchedEffect
                 restored = runCatching { requester.requestFocus() }.getOrDefault(false)
@@ -279,188 +278,190 @@ internal fun TvLibraryScreen(
                 .toInt()
                 .coerceIn(4, 6)
 
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(gridColumns),
-            state = gridState,
-            modifier = Modifier.fillMaxSize().padding(top = TiveoTopBarHeight),
-            contentPadding = PaddingValues(
-                start = contentStartPadding,
-                end = contentStartPadding,
-                top = 10.dp,
-                bottom = 48.dp,
-            ),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
-        ) {
-            item(
-                key = "library-header",
-                span = { GridItemSpan(maxLineSpan) },
+        TvPosterGridReveal {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(gridColumns),
+                state = gridState,
+                modifier = Modifier.fillMaxSize().padding(top = TiveoTopBarHeight),
+                contentPadding = PaddingValues(
+                    start = contentStartPadding,
+                    end = contentStartPadding,
+                    top = 10.dp,
+                    bottom = 48.dp,
+                ),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
-                Column(
-                    modifier = Modifier.onPreviewKeyEvent { event ->
-                        if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-                            focusTopBar()
-                            true
-                        } else {
-                            false
-                        }
-                    },
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                item(
+                    key = "library-header",
+                    span = { GridItemSpan(maxLineSpan) },
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
+                    Column(
+                        modifier = Modifier.onPreviewKeyEvent { event ->
+                            if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                                focusTopBar()
+                                true
+                            } else {
+                                false
+                            }
+                        },
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            listOf("Saved", "History").forEachIndexed { index, label ->
-                                val selected = historySelected == (index == 1)
-                                LibraryViewModeButton(
-                                    gridView = gridView,
-                                    label = label,
-                                    selected = selected,
-                                    requester = if (index == 0) favoritesRequester else historyRequester,
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                listOf("Saved", "History").forEachIndexed { index, label ->
+                                    val selected = historySelected == (index == 1)
+                                    LibraryViewModeButton(
+                                        gridView = gridView,
+                                        label = label,
+                                        selected = selected,
+                                        requester = if (index == 0) favoritesRequester else historyRequester,
+                                        onFocused = {
+                                            if (!selected) {
+                                                historySelected = index == 1
+                                                TvLibraryFocusMemory.firstVisibleItemIndex = 0
+                                                TvLibraryFocusMemory.firstVisibleItemScrollOffset = 0
+                                            }
+                                            if (!topBar.hasFocus) rememberTarget("section")
+                                        },
+                                        onToggle = {
+                                            if (!selected) {
+                                                historySelected = index == 1
+                                                TvLibraryFocusMemory.firstVisibleItemIndex = 0
+                                                TvLibraryFocusMemory.firstVisibleItemScrollOffset = 0
+                                                rememberTarget("section")
+                                            }
+                                        },
+                                        onLeft = {
+                                            if (index == 0) focusTopBar() else favoritesRequester.requestFocus()
+                                            true
+                                        },
+                                        onRight = {
+                                            if (index == 0) historyRequester.requestFocus() else viewModeRequester.requestFocus()
+                                            true
+                                        },
+                                        onDown = ::requestFirstMediaFocus,
+                                    )
+                                }
+                            }
+                            LibraryViewModeButton(
+                                gridView = gridView,
+                                requester = viewModeRequester,
+                                onFocused = {
+                                    if (!topBar.hasFocus) rememberTarget("view")
+                                },
+                                onToggle = {
+                                    val nextGridView = !gridView
+                                    gridView = nextGridView
+                                    libraryUiPreferences
+                                        .edit()
+                                        .putBoolean(LIBRARY_GRID_VIEW_KEY, nextGridView)
+                                        .apply()
+                                    rememberTarget("view")
+                                },
+                                onLeft = {
+                                    (if (historySelected) historyRequester else favoritesRequester).requestFocus()
+                                    true
+                                },
+                                onDown = ::requestFirstMediaFocus,
+                            )
+                        }
+                        if (deleteHistoryError) Text("Couldn't delete history. Try again.", color = TvDesign.Muted, fontSize = 12.sp)
+                    }
+                }
+
+                when {
+                    watchlist.isEmpty() -> {
+                        item(
+                            key = "library-saved-empty",
+                            span = { GridItemSpan(maxLineSpan) },
+                        ) {
+                            LibraryEmptyState(
+                                title = when {
+                                    loading -> "Loading My List…"
+                                    loadFailed -> "Couldn't load My List"
+                                    historySelected -> "No watch history yet"
+                                    else -> "Your list is empty"
+                                },
+                                body = when {
+                                    loading -> "Please wait."
+                                    loadFailed -> "Reopen My List to try again."
+                                    historySelected -> "Titles you watch will appear here."
+                                    else -> "Titles you add to My List will appear here."
+                                },
+                            )
+                        }
+                    }
+
+                    gridView -> {
+                        watchlist.forEachIndexed { index, media ->
+                            val key = libraryMediaKey(media)
+                            item(key = "library-grid:$key") {
+                                LibraryPosterCard(
+                                    media = media,
+                                    historyCaption = if (historySelected) historyCaptions[key] else null,
+                                    requester = mediaRequesters.getValue(key),
                                     onFocused = {
-                                        if (!selected) {
-                                            historySelected = index == 1
-                                            TvLibraryFocusMemory.firstVisibleItemIndex = 0
-                                            TvLibraryFocusMemory.firstVisibleItemScrollOffset = 0
+                                        if (!topBar.hasFocus) rememberTarget("item", key)
+                                    },
+                                    onClick = {
+                                        TvLibraryFocusMemory.firstVisibleItemIndex =
+                                            gridState.firstVisibleItemIndex
+                                        TvLibraryFocusMemory.firstVisibleItemScrollOffset =
+                                            gridState.firstVisibleItemScrollOffset
+                                        rememberTarget("item", key)
+                                        onOpenMedia(media)
+                                    },
+                                    onLongClick = { actionMedia = media },
+                                    onUpFromFirstRow = if (index < gridColumns) {
+                                        {
+                                            requestHeaderFocus()
                                         }
-                                        if (!topBar.hasFocus) rememberTarget("section")
-                                    },
-                                    onToggle = {
-                                        if (!selected) {
-                                            historySelected = index == 1
-                                            TvLibraryFocusMemory.firstVisibleItemIndex = 0
-                                            TvLibraryFocusMemory.firstVisibleItemScrollOffset = 0
-                                            rememberTarget("section")
-                                        }
-                                    },
-                                    onLeft = {
-                                        if (index == 0) focusTopBar() else favoritesRequester.requestFocus()
-                                        true
-                                    },
-                                    onRight = {
-                                        if (index == 0) historyRequester.requestFocus() else viewModeRequester.requestFocus()
-                                        true
-                                    },
-                                    onDown = ::requestFirstMediaFocus,
+                                    } else null,
+                                    onLeftFromFirstColumn = if (index % gridColumns == 0) {
+                                        ::focusTopBar
+                                    } else null,
+                                    blockRight =
+                                        index % gridColumns == gridColumns - 1 ||
+                                            index == watchlist.lastIndex,
                                 )
                             }
                         }
-                        LibraryViewModeButton(
-                            gridView = gridView,
-                            requester = viewModeRequester,
-                            onFocused = {
-                                if (!topBar.hasFocus) rememberTarget("view")
-                            },
-                            onToggle = {
-                                val nextGridView = !gridView
-                                gridView = nextGridView
-                                libraryUiPreferences
-                                    .edit()
-                                    .putBoolean(LIBRARY_GRID_VIEW_KEY, nextGridView)
-                                    .apply()
-                                rememberTarget("view")
-                            },
-                            onLeft = {
-                                (if (historySelected) historyRequester else favoritesRequester).requestFocus()
-                                true
-                            },
-                            onDown = ::requestFirstMediaFocus,
-                        )
                     }
-                    if (deleteHistoryError) Text("Couldn't delete history. Try again.", color = TvDesign.Muted, fontSize = 12.sp)
-                }
-            }
 
-            when {
-                watchlist.isEmpty() -> {
-                    item(
-                        key = "library-saved-empty",
-                        span = { GridItemSpan(maxLineSpan) },
-                    ) {
-                        LibraryEmptyState(
-                            title = when {
-                                loading -> "Loading My List…"
-                                loadFailed -> "Couldn't load My List"
-                                historySelected -> "No watch history yet"
-                                else -> "Your list is empty"
-                            },
-                            body = when {
-                                loading -> "Please wait."
-                                loadFailed -> "Reopen My List to try again."
-                                historySelected -> "Titles you watch will appear here."
-                                else -> "Titles you add to My List will appear here."
-                            },
-                        )
-                    }
-                }
-
-                gridView -> {
-                    watchlist.forEachIndexed { index, media ->
-                        val key = libraryMediaKey(media)
-                        item(key = "library-grid:$key") {
-                            LibraryPosterCard(
-                                media = media,
-                                historyCaption = if (historySelected) historyCaptions[key] else null,
-                                requester = mediaRequesters.getValue(key),
-                                onFocused = {
-                                    if (!topBar.hasFocus) rememberTarget("item", key)
-                                },
-                                onClick = {
-                                    TvLibraryFocusMemory.firstVisibleItemIndex =
-                                        gridState.firstVisibleItemIndex
-                                    TvLibraryFocusMemory.firstVisibleItemScrollOffset =
-                                        gridState.firstVisibleItemScrollOffset
-                                    rememberTarget("item", key)
-                                    onOpenMedia(media)
-                                },
-                                onLongClick = { actionMedia = media },
-                                onUpFromFirstRow = if (index < gridColumns) {
-                                    {
-                                        requestHeaderFocus()
-                                    }
-                                } else null,
-                                onLeftFromFirstColumn = if (index % gridColumns == 0) {
-                                    ::focusTopBar
-                                } else null,
-                                blockRight =
-                                    index % gridColumns == gridColumns - 1 ||
-                                        index == watchlist.lastIndex,
-                            )
-                        }
-                    }
-                }
-
-                else -> {
-                    watchlist.forEachIndexed { index, media ->
-                        val key = libraryMediaKey(media)
-                        item(
-                            key = "library-list:$key",
-                            span = { GridItemSpan(maxLineSpan) },
-                        ) {
-                            LibraryListRow(
-                                media = media,
-                                historyCaption = if (historySelected) historyCaptions[key] else null,
-                                requester = mediaRequesters.getValue(key),
-                                onFocused = {
-                                    if (!topBar.hasFocus) rememberTarget("item", key)
-                                },
-                                onClick = {
-                                    TvLibraryFocusMemory.firstVisibleItemIndex =
-                                        gridState.firstVisibleItemIndex
-                                    TvLibraryFocusMemory.firstVisibleItemScrollOffset =
-                                        gridState.firstVisibleItemScrollOffset
-                                    rememberTarget("item", key)
-                                    onOpenMedia(media)
-                                },
-                                onLongClick = { actionMedia = media },
-                                onLeft = ::focusTopBar,
-                                onUpFromFirst = if (index == 0) {
-                                    { requestHeaderFocus() }
-                                } else null,
-                            )
+                    else -> {
+                        watchlist.forEachIndexed { index, media ->
+                            val key = libraryMediaKey(media)
+                            item(
+                                key = "library-list:$key",
+                                span = { GridItemSpan(maxLineSpan) },
+                            ) {
+                                LibraryListRow(
+                                    media = media,
+                                    historyCaption = if (historySelected) historyCaptions[key] else null,
+                                    requester = mediaRequesters.getValue(key),
+                                    onFocused = {
+                                        if (!topBar.hasFocus) rememberTarget("item", key)
+                                    },
+                                    onClick = {
+                                        TvLibraryFocusMemory.firstVisibleItemIndex =
+                                            gridState.firstVisibleItemIndex
+                                        TvLibraryFocusMemory.firstVisibleItemScrollOffset =
+                                            gridState.firstVisibleItemScrollOffset
+                                        rememberTarget("item", key)
+                                        onOpenMedia(media)
+                                    },
+                                    onLongClick = { actionMedia = media },
+                                    onLeft = ::focusTopBar,
+                                    onUpFromFirst = if (index == 0) {
+                                        { requestHeaderFocus() }
+                                    } else null,
+                                )
+                            }
                         }
                     }
                 }
@@ -635,24 +636,9 @@ private fun LibraryPosterCard(
     blockRight: Boolean,
 ) {
     var focused by remember(media.id, media.type) { mutableStateOf(false) }
-    val scale by animateFloatAsState(
-        targetValue = if (focused) tvTunedFocusScale(1.02f) else 1f,
-        animationSpec = tvTunedSpec(TvMotionGroup.FOCUS, focused, tween(
-            durationMillis = if (focused) TvMotion.FOCUS_IN_MS else TvMotion.FOCUS_OUT_MS,
-            easing = TvMotion.EaseOut,
-        )),
-        label = "libraryPosterScale",
-    )
 
     Column(
         modifier = Modifier
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-                shadowElevation = if (focused) 7.dp.toPx() else 0f
-                shape = PosterShape
-                clip = false
-            }
             .focusRequester(requester)
             .onFocusChanged {
                 focused = it.isFocused
@@ -709,6 +695,7 @@ private fun LibraryPosterCard(
             color = TvDesign.White,
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
+            minLines = 2,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
