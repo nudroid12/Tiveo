@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -136,6 +137,8 @@ internal fun TvLibraryScreen(
     val context = LocalContext.current
     val historyScope = rememberCoroutineScope()
     var deleteHistoryError by remember(profileId) { mutableStateOf(false) }
+    var deletingHistory by remember(profileId) { mutableStateOf(false) }
+    var historyDeleteIndex by remember(profileId) { mutableStateOf<Int?>(null) }
     val libraryUiPreferences = remember {
         context.getSharedPreferences(LIBRARY_UI_PREFS, Context.MODE_PRIVATE)
     }
@@ -227,11 +230,48 @@ internal fun TvLibraryScreen(
             }
     }
 
+    LaunchedEffect(active, actionMedia, deletingHistory, loading, historyDeleteIndex, mediaKeys) {
+        val deletedIndex = historyDeleteIndex ?: return@LaunchedEffect
+        if (!active) {
+            historyDeleteIndex = null
+            return@LaunchedEffect
+        }
+        if (actionMedia != null || deletingHistory || loading) return@LaunchedEffect
+
+        // The next title takes the deleted title's slot. At the end, use the
+        // preceding title, or the History tab if there are no titles left.
+        val index = deletedIndex.coerceAtMost(mediaKeys.lastIndex)
+        val key = mediaKeys.getOrNull(index)
+        val requester = key?.let(mediaRequesters::get)
+        if (requester != null) {
+            val gridIndex = index + LIBRARY_HEADER_ITEMS
+            if (gridState.layoutInfo.visibleItemsInfo.none { it.index == gridIndex }) {
+                gridState.scrollToItem(gridIndex)
+            }
+            repeat(3) {
+                withFrameNanos { }
+                if (runCatching { requester.requestFocus() }.getOrDefault(false)) {
+                    rememberTarget("item", key)
+                    historyDeleteIndex = null
+                    return@LaunchedEffect
+                }
+            }
+        }
+
+        gridState.scrollToItem(0)
+        withFrameNanos { }
+        runCatching { historyRequester.requestFocus() }
+        rememberTarget("section", null)
+        historyDeleteIndex = null
+    }
+
     // Vueo-reference focus restoration: poster first when returning from
     // Detail, otherwise the primary Library selector owns initial focus.
     LaunchedEffect(active, mediaKeys, gridView, historySelected) {
         if (!active || topBar.hasFocus) return@LaunchedEffect
+        if (historyDeleteIndex != null) return@LaunchedEffect
         delay(110)
+        if (historyDeleteIndex != null) return@LaunchedEffect
         if (topBar.hasFocus) return@LaunchedEffect
         var restored = false
         if (lastTarget == "item") {
@@ -321,7 +361,7 @@ internal fun TvLibraryScreen(
                                         selected = selected,
                                         requester = if (index == 0) favoritesRequester else historyRequester,
                                         onFocused = {
-                                            if (!selected) {
+                                            if (!selected && historyDeleteIndex == null) {
                                                 historySelected = index == 1
                                                 TvLibraryFocusMemory.firstVisibleItemIndex = 0
                                                 TvLibraryFocusMemory.firstVisibleItemScrollOffset = 0
@@ -329,7 +369,7 @@ internal fun TvLibraryScreen(
                                             if (!topBar.hasFocus) rememberTarget("section")
                                         },
                                         onToggle = {
-                                            if (!selected) {
+                                            if (!selected && historyDeleteIndex == null) {
                                                 historySelected = index == 1
                                                 TvLibraryFocusMemory.firstVisibleItemIndex = 0
                                                 TvLibraryFocusMemory.firstVisibleItemScrollOffset = 0
@@ -471,7 +511,7 @@ internal fun TvLibraryScreen(
         TiveoPageContentFocus(
             topBar = topBar,
             tab = "Library",
-            active = active && actionMedia == null,
+            active = active && actionMedia == null && historyDeleteIndex == null,
             onReturnToContent = {
                 if (!restoreContentFocus()) {
                     historyScope.launch {
@@ -490,18 +530,21 @@ internal fun TvLibraryScreen(
             onOpenDetails = { onOpenMedia(media) },
             onChanged = { libraryRevision += 1 },
             onDismiss = { actionMedia = null },
-            onDeleteHistory = if (historySelected) ({
+            onDeleteHistory = if (historySelected && historyDeleteIndex == null) ({
+                historyDeleteIndex = mediaKeys.indexOf(libraryMediaKey(media)).coerceAtLeast(0)
+                deletingHistory = true
                 deleteHistoryError = false
                 historyScope.launch {
                     val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                         runCatching { com.vueo.shared.core.storage.LibraryStore(context, profileIdOverride = profileId).resetTitleHistory(media) }
                     }
                     if (result.isSuccess) {
-                        TvLibraryFocusMemory.firstVisibleItemIndex = 0
-                        TvLibraryFocusMemory.firstVisibleItemScrollOffset = 0
-                        rememberTarget("section")
+                        loading = true
                         libraryRevision += 1
-                    } else deleteHistoryError = true
+                    } else {
+                        deleteHistoryError = true
+                    }
+                    deletingHistory = false
                 }
             }) else null,
         )
