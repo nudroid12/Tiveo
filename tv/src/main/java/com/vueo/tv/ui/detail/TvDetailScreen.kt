@@ -9,6 +9,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -414,80 +415,84 @@ fun TvDetailScreen(
         detailPrimaryActionLabel(item, selectedEpisode, playbackEntry)
     }
 
-    TvDetailPresentation(
-        state = TvDetailPresentationState(
-            item = item,
-            loading = loading,
-            watchlisted = watchlisted,
-            movieWatched = movieWatched,
-            vueoExtras = vueoExtras,
-            titleArtworkLoading = titleArtworkLoading,
-            ratings = ratings,
-            episodeRatings = episodeRatings,
-            dnaMatch = dnaMatch,
-            seasons = seasons,
-            selectedSeason = selectedSeason,
-            episodes = episodesForSeason,
-            selectedEpisode = selectedEpisode,
-            history = history,
-            playbackEntry = playbackEntry,
-            related = related,
-            tmdbMoreLikeThisEnabled = tmdbMoreLikeThisEnabled,
-            primaryActionLabel = primaryActionLabel,
-        ),
-        onPlay = {
-            val seriesNeedsEpisode = item.isDetailSeries() && item.episodes.isNotEmpty()
-            if (!seriesNeedsEpisode || selectedEpisode != null) {
-                val startPositionMs = playbackEntry?.takeIf(::detailCanResume)?.positionMs ?: 0L
-                onWatch(item, selectedEpisode, startPositionMs)
-            }
-        },
-        onToggleList = {
-            // Preserve the user's immediate visual choice even if startup
-            // hydration is still carrying a pre-click watchlist snapshot.
-            val updated = runtime.libraryStore.toggleWatchlist(item)
-            watchlistUserOverride = updated
-            watchlisted = updated
-            onLibraryChanged()
-        },
-        onToggleWatched = {
-            if (!item.isDetailSeries()) {
-                movieWatched = !movieWatched
-                runtime.libraryStore.setMarkedWatched(item, movieWatched)
+    // Replacing a title from More Like This must not reuse the old lazy rail.
+    key(initial.id, initial.type, initial.sourceExtensionId) {
+        TvDetailPresentation(
+            active = active,
+            state = TvDetailPresentationState(
+                item = item,
+                loading = loading,
+                watchlisted = watchlisted,
+                movieWatched = movieWatched,
+                vueoExtras = vueoExtras,
+                titleArtworkLoading = titleArtworkLoading,
+                ratings = ratings,
+                episodeRatings = episodeRatings,
+                dnaMatch = dnaMatch,
+                seasons = seasons,
+                selectedSeason = selectedSeason,
+                episodes = episodesForSeason,
+                selectedEpisode = selectedEpisode,
+                history = history,
+                playbackEntry = playbackEntry,
+                related = related,
+                tmdbMoreLikeThisEnabled = tmdbMoreLikeThisEnabled,
+                primaryActionLabel = primaryActionLabel,
+            ),
+            onPlay = {
+                val seriesNeedsEpisode = item.isDetailSeries() && item.episodes.isNotEmpty()
+                if (!seriesNeedsEpisode || selectedEpisode != null) {
+                    val startPositionMs = playbackEntry?.takeIf(::detailCanResume)?.positionMs ?: 0L
+                    onWatch(item, selectedEpisode, startPositionMs)
+                }
+            },
+            onToggleList = {
+                // Preserve the user's immediate visual choice even if startup
+                // hydration is still carrying a pre-click watchlist snapshot.
+                val updated = runtime.libraryStore.toggleWatchlist(item)
+                watchlistUserOverride = updated
+                watchlisted = updated
                 onLibraryChanged()
-            }
-        },
-        onSeasonSelected = { season ->
-            episodeSelectionTouchedByUser = true
-            selectedSeason = season
-            selectedEpisode = item.episodes
-                .asSequence()
-                .filter { it.season == season }
-                .sortedBy(EpisodeItem::episode)
-                .firstOrNull()
-            VueoDetailFocusMemory.selectedSeason = season
-            VueoDetailFocusMemory.episodeId = null
-        },
-        onEpisodeFocused = { episode ->
-            // Nuvio keeps navigation memory separate from the playback selection.
-            // Moving focus must not reload history or change the hero action.
-            VueoDetailFocusMemory.selectedSeason = episode.season
-            VueoDetailFocusMemory.episodeId = episode.id
-        },
-        onEpisodeSelected = { episode ->
-            episodeSelectionTouchedByUser = true
-            selectedSeason = episode.season
-            selectedEpisode = episode
-            VueoDetailFocusMemory.selectedSeason = episode.season
-            VueoDetailFocusMemory.episodeId = episode.id
-            val episodeEntry = detailPlaybackEntry(item, episode, history)
-                ?: detailInitialPlaybackEntry(item, episode, initialLibraryEntry)
-            val startPositionMs = episodeEntry?.takeIf(::detailCanResume)?.positionMs ?: 0L
-            onWatch(item, episode, startPositionMs)
-        },
-        onOpenRelated = onOpenRelated,
-        onOpenEntity = onOpenEntity,
-    )
+            },
+            onToggleWatched = {
+                if (!item.isDetailSeries()) {
+                    movieWatched = !movieWatched
+                    runtime.libraryStore.setMarkedWatched(item, movieWatched)
+                    onLibraryChanged()
+                }
+            },
+            onSeasonSelected = { season ->
+                episodeSelectionTouchedByUser = true
+                selectedSeason = season
+                selectedEpisode = item.episodes
+                    .asSequence()
+                    .filter { it.season == season }
+                    .sortedBy(EpisodeItem::episode)
+                    .firstOrNull()
+                VueoDetailFocusMemory.selectedSeason = season
+                VueoDetailFocusMemory.episodeId = null
+            },
+            onEpisodeFocused = { episode ->
+                // Nuvio keeps navigation memory separate from the playback selection.
+                // Moving focus must not reload history or change the hero action.
+                VueoDetailFocusMemory.selectedSeason = episode.season
+                VueoDetailFocusMemory.episodeId = episode.id
+            },
+            onEpisodeSelected = { episode ->
+                episodeSelectionTouchedByUser = true
+                selectedSeason = episode.season
+                selectedEpisode = episode
+                VueoDetailFocusMemory.selectedSeason = episode.season
+                VueoDetailFocusMemory.episodeId = episode.id
+                val episodeEntry = detailPlaybackEntry(item, episode, history)
+                    ?: detailInitialPlaybackEntry(item, episode, initialLibraryEntry)
+                val startPositionMs = episodeEntry?.takeIf(::detailCanResume)?.positionMs ?: 0L
+                onWatch(item, episode, startPositionMs)
+            },
+            onOpenRelated = onOpenRelated,
+            onOpenEntity = onOpenEntity,
+        )
+    }
 }
 
 internal data class TvDetailPresentationState(

@@ -134,18 +134,27 @@ internal fun TvDetailPresentation(
     LaunchedEffect(active) {
         if (!active) navigationJob?.cancel()
     }
-    fun revealAndFocus(index: Int, target: FocusRequester) {
-        // Latest navigation replaces the previous center/reveal animation.
-        // Attached targets use normal focus relocation, as in Nuvio.
+    suspend fun requestSectionFocus(target: FocusRequester, attempts: Int = 8): Boolean {
+        repeat(attempts) {
+            withFrameNanos { }
+            if (runCatching { target.requestFocus() }.getOrDefault(false)) return true
+        }
+        return false
+    }
+
+    fun revealAndFocus(index: Int, target: FocusRequester, forceReveal: Boolean = false) {
+        // Related cards sit in a relocation boundary. Requesting an attached node
+        // can succeed without bringing its vertical section onto the screen.
+        // Reveal explicitly both entering and leaving that rail.
+        val crossesRelated = forceReveal || target == relatedContentRequester
         val generation = ++navigationGeneration
         navigationJob?.cancel()
         movingBetweenSections = false
-        if (index != 0 && runCatching { target.requestFocus() }.getOrDefault(false)) return
+        if (!crossesRelated && index != 0 && runCatching { target.requestFocus() }.getOrDefault(false)) return
         movingBetweenSections = true
         navigationJob = navigationScope.launch {
             try {
                 val viewport = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
-                // Reveal the next lazy item before requesting its not-yet-attached focus node.
                 val visibleItem = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
                 if (visibleItem != null) {
                     val destinationOffset = if (index == 0) 0 else
@@ -157,35 +166,54 @@ internal fun TvDetailPresentation(
                 } else {
                     listState.animateScrollToItem(index, if (index == 0) 0 else -viewport / 2)
                 }
-                for (attempt in 0 until 8) {
-                    withFrameNanos { }
-                    if (runCatching { target.requestFocus() }.getOrDefault(false)) break
+                val focused = requestSectionFocus(target)
+                if (!focused && crossesRelated && navigationGeneration == generation) {
+                    // Metadata may have shifted the section while the row was
+                    // being revealed. Retry after an explicit lazy-list placement.
+                    listState.scrollToItem(index)
+                    if (!requestSectionFocus(target) && navigationGeneration == generation) {
+                        // A removed or unloaded row must not leave the remote
+                        // trapped on a detached focus node.
+                        listState.scrollToItem(0)
+                        if (!requestSectionFocus(playRequester, 4)) {
+                            requestSectionFocus(listRequester, 4)
+                        }
+                    }
                 }
             } finally {
                 if (navigationGeneration == generation) movingBetweenSections = false
             }
         }
     }
-    fun sectionNavigation(up: Pair<Int, FocusRequester>?, down: Pair<Int, FocusRequester>?, episodeRanges: Boolean = false): Modifier =
-        Modifier.onPreviewKeyEvent { event ->
-            if (episodeRanges && state.episodes.size > 50 &&
-                ((event.key == Key.DirectionUp && !episodeToolbarFocused) ||
-                    (event.key == Key.DirectionDown && episodeToolbarFocused))) return@onPreviewKeyEvent false
-            val destination = when (event.key) {
-                Key.DirectionDown -> down
-                Key.DirectionUp -> up
-                else -> null
-            } ?: return@onPreviewKeyEvent false
-            if (event.type == KeyEventType.KeyDown) {
-                val now = SystemClock.uptimeMillis()
-                if (event.nativeKeyEvent.repeatCount > 0 && now - lastVerticalRepeat < 80L) {
-                    return@onPreviewKeyEvent true
-                }
-                lastVerticalRepeat = now
-                revealAndFocus(destination.first, destination.second)
-            }
-            true
+    fun sectionNavigation(
+        up: Pair<Int, FocusRequester>?,
+        down: Pair<Int, FocusRequester>?,
+        episodeRanges: Boolean = false,
+        relatedBoundary: Boolean = false,
+    ): Modifier = Modifier.onPreviewKeyEvent { event ->
+        if (episodeRanges && state.episodes.size > 50 &&
+            ((event.key == Key.DirectionUp && !episodeToolbarFocused) ||
+                (event.key == Key.DirectionDown && episodeToolbarFocused))) return@onPreviewKeyEvent false
+        // No section below More Like This. Prevent spatial search from
+        // sending focus into a detached or retained background screen.
+        if (relatedBoundary && event.key == Key.DirectionDown && down == null) {
+            return@onPreviewKeyEvent true
         }
+        val destination = when (event.key) {
+            Key.DirectionDown -> down
+            Key.DirectionUp -> up
+            else -> null
+        } ?: return@onPreviewKeyEvent false
+        if (event.type == KeyEventType.KeyDown) {
+            val now = SystemClock.uptimeMillis()
+            if (event.nativeKeyEvent.repeatCount > 0 && now - lastVerticalRepeat < 80L) {
+                return@onPreviewKeyEvent true
+            }
+            lastVerticalRepeat = now
+            revealAndFocus(destination.first, destination.second, forceReveal = relatedBoundary)
+        }
+        true
+    }
 
     val firstBelowSeasons = when {
         hasEpisodes -> episodeRequester
@@ -235,7 +263,18 @@ internal fun TvDetailPresentation(
     LaunchedEffect(mediaKey, active) {
         if (!active) return@LaunchedEffect
         delay(110)
-        runCatching { playRequester.requestFocus() }
+        if (entryFocusRestored || heroFocused) return@LaunchedEffect
+        // The new title has its own lazy state. Wait for the hero to attach,
+        // rather than issuing one focus request that can fail during loading.
+        listState.scrollToItem(0)
+        repeat(8) {
+            withFrameNanos { }
+            if (entryFocusRestored || heroFocused) return@LaunchedEffect
+            if (runCatching { playRequester.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+        }
+        if (!entryFocusRestored && !heroFocused) {
+            requestSectionFocus(listRequester, 4)
+        }
     }
 
     LaunchedEffect(mediaKey, state.selectedEpisode?.id, hasEpisodes, active) {
@@ -395,7 +434,7 @@ internal fun TvDetailPresentation(
                         hasSeasons -> 1
                         else -> 0
                     }
-                    Box(sectionNavigation(relatedUpIndex to relatedUpRequester, null)
+                    Box(sectionNavigation(relatedUpIndex to relatedUpRequester, null, relatedBoundary = true)
                         .bringIntoViewResponder(episodeRowResponder)) {
                     VueoDetailRelatedSection(
                         items = state.related,
