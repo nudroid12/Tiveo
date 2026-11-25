@@ -327,7 +327,7 @@ private fun VueoPlayButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var focused by remember(label) { mutableStateOf(false) }
+    var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(6.dp)
 
     Row(
@@ -354,7 +354,6 @@ private fun VueoPlayButton(
                 shape = shape,
             )
             .clickable(enabled = enabled, onClick = onClick)
-            .focusable(enabled)
             .padding(horizontal = 26.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
