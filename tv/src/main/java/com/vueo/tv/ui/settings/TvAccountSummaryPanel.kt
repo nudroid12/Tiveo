@@ -91,7 +91,7 @@ internal fun TvAccountSummaryPanel(
                             }
                         }
                         .background(if (focused) TvDesign.SurfaceRaised else TvDesign.Surface, shape)
-                        .border(if (focused) 1.5.dp else 0.dp, if (focused) TvDesign.White else TvDesign.Surface, shape)
+                        .border(if (focused) 1.5.dp else 0.dp, if (focused) TvDesign.Accent else TvDesign.Surface, shape)
                         .focusable(enabled = action.enabled)
                         .padding(horizontal = 18.dp, vertical = 10.dp),
                     contentAlignment = Alignment.Center,

@@ -1093,7 +1093,7 @@ private fun SearchModeToggle(
                 if (
                     mode == SearchMode.TITLE
                 ) {
-                    Color.White
+                    VueoPalette.Accent
                 } else {
                     VueoPalette.Muted
                 },
@@ -1125,9 +1125,7 @@ private fun SearchModeToggle(
                         )
                     )
                     .background(
-                        Color.White.copy(
-                            alpha = .92f
-                        )
+                        VueoPalette.Accent
                     )
                     .clickable {
                         onModeChange(
@@ -1164,7 +1162,7 @@ private fun SearchModeToggle(
                             .size(18.dp)
                             .clip(CircleShape)
                             .background(
-                                VueoPalette.Background
+                                VueoPalette.OnAccent
                             )
                 )
             }
@@ -1176,7 +1174,7 @@ private fun SearchModeToggle(
                 if (
                     mode == SearchMode.ACTOR
                 ) {
-                    Color.White
+                    VueoPalette.Accent
                 } else {
                     VueoPalette.Muted
                 },

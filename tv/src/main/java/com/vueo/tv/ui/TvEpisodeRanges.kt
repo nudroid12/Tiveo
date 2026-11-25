@@ -209,10 +209,10 @@ internal fun TvEpisodeRangeControls(
                     if (event.nativeKeyEvent.keyCode != KeyEvent.KEYCODE_DPAD_DOWN) false
                     else { if (event.nativeKeyEvent.action == KeyEvent.ACTION_DOWN) { state.select(index); onInteraction(); onDown() }; true }
                 }
-                .background(if (selected) Color.White else if (focused) Color(0xFF555555) else Color(0xFF303030), shape)
-                .border(if (focused) 2.dp else 1.dp, if (focused) Color.White else Color.White.copy(alpha = .15f), shape)
+                .background(if (selected) TvDesign.Accent else if (focused) TvDesign.FocusSurface else TvDesign.SurfaceRaised, shape)
+                .border(if (focused) 2.dp else 1.dp, if (focused) TvDesign.Accent else Color.White.copy(alpha = .15f), shape)
                 .clickable { onInteraction(); state.select(index) }.padding(horizontal = 14.dp, vertical = 8.dp)) {
-                Text("${group.first().episode}–${group.last().episode}", color = if (selected) Color.Black else Color.White, fontSize = 11.sp)
+                Text("${group.first().episode}–${group.last().episode}", color = if (selected) TvDesign.OnAccent else Color.White, fontSize = 11.sp)
             }
         }
         }
@@ -224,7 +224,7 @@ internal fun TvEpisodeRangeControls(
                     if (event.nativeKeyEvent.keyCode != KeyEvent.KEYCODE_DPAD_DOWN) false
                     else { if (event.nativeKeyEvent.action == KeyEvent.ACTION_DOWN) onDown(); true }
                 }
-                .background(if (focused) Color(0xFF555555) else Color(0xFF303030), shape).border(if (focused) 2.dp else 1.dp, if (focused) Color.White else Color.White.copy(alpha = .4f), shape)
+                .background(if (focused) TvDesign.FocusSurface else TvDesign.SurfaceRaised, shape).border(if (focused) 2.dp else 1.dp, if (focused) TvDesign.Accent else Color.White.copy(alpha = .4f), shape)
                 .clickable { onInteraction(); dialog = true }.padding(horizontal = 14.dp, vertical = 8.dp)) {
                 Text("Go to episode", color = Color.White, fontSize = 11.sp)
             }

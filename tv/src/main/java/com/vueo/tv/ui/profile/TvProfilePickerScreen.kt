@@ -1,5 +1,7 @@
 package com.vueo.tv.profile
 
+import com.vueo.tv.ui.TvDesign
+
 import com.vueo.tv.ui.motion.*
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
@@ -106,12 +108,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 
-private val PickerBlack = Color(0xFF050706)
-private val PickerPanel = Color(0xFF101412)
-private val PickerPanelRaised = Color(0xFF171C19)
-private val PickerGreen = Color(0xFFB6FF00)
-private val PickerMuted = Color(0xFFAAB2AD)
-private val PickerStroke = Color.White.copy(alpha = 0.14f)
+private val PickerBlack get() = TvDesign.Black
+private val PickerPanel get() = TvDesign.Surface
+private val PickerPanelRaised get() = TvDesign.SurfaceRaised
+private val PickerAccent get() = TvDesign.Accent
+private val PickerMuted get() = TvDesign.Muted
+private val PickerStroke get() = TvDesign.Stroke
 private val PickerDanger = Color(0xFFFF7B72)
 
 private enum class ProfilePickerMode {
@@ -629,11 +631,11 @@ private fun TvProfileEditorScreen(
                                 colors = OutlinedTextFieldDefaults.colors(
                                     focusedTextColor = Color.White,
                                     unfocusedTextColor = Color.White,
-                                    focusedBorderColor = Color.White,
+                                    focusedBorderColor = TvDesign.Accent,
                                     unfocusedBorderColor = PickerStroke,
-                                    focusedLabelColor = Color.White,
+                                    focusedLabelColor = TvDesign.Accent,
                                     unfocusedLabelColor = PickerMuted,
-                                    cursorColor = Color.White,
+                                    cursorColor = TvDesign.Accent,
                                 ),
                             )
                         }
@@ -913,8 +915,8 @@ private fun TvProfileBackground(content: @Composable () -> Unit) {
             .background(
                 Brush.verticalGradient(
                     listOf(
-                        Color(0xFF111513),
-                        Color(0xFF080B09),
+                        TvDesign.Surface,
+                        TvDesign.Black,
                         PickerBlack,
                         PickerBlack,
                     )
@@ -967,8 +969,8 @@ private fun PickerProfileCard(
                     .border(
                         width = if (focused) 4.dp else if (active) 3.dp else 1.dp,
                         color = when {
-                            focused -> Color.White
-                            active -> PickerGreen
+                            focused -> TvDesign.Accent
+                            active -> PickerAccent
                             else -> PickerStroke
                         },
                         shape = CircleShape,
@@ -982,11 +984,11 @@ private fun PickerProfileCard(
                 Surface(
                     modifier = Modifier.align(Alignment.BottomEnd).size(30.dp),
                     shape = CircleShape,
-                    color = PickerGreen,
+                    color = PickerAccent,
                     border = BorderStroke(3.dp, PickerBlack),
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Text("✓", color = Color.Black, fontSize = 14.sp, fontWeight = FontWeight.Black)
+                        Text("✓", color = TvDesign.OnAccent, fontSize = 14.sp, fontWeight = FontWeight.Black)
                     }
                 }
             }
@@ -1037,18 +1039,18 @@ private fun ManageProfileCard(
                 modifier = Modifier
                     .size(116.dp)
                     .clip(CircleShape)
-                    .border(if (focused) 4.dp else 1.dp, if (focused) Color.White else PickerStroke, CircleShape),
+                    .border(if (focused) 4.dp else 1.dp, if (focused) TvDesign.Accent else PickerStroke, CircleShape),
             ) {
                 ProfileAvatarImage(profile = profile, size = 116)
             }
             Surface(
                 modifier = Modifier.align(Alignment.BottomEnd).size(31.dp),
                 shape = CircleShape,
-                color = Color.White,
+                color = TvDesign.Accent,
                 border = BorderStroke(3.dp, PickerBlack),
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Icon(Icons.Default.Edit, contentDescription = "Edit ${profile.name}", tint = Color.Black, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.Edit, contentDescription = "Edit ${profile.name}", tint = TvDesign.OnAccent, modifier = Modifier.size(16.dp))
                 }
             }
         }
@@ -1083,7 +1085,7 @@ private fun AddProfileCard(onClick: () -> Unit) {
             modifier = Modifier.size(116.dp),
             shape = CircleShape,
             color = if (focused) PickerPanelRaised else PickerPanel,
-            border = BorderStroke(if (focused) 4.dp else 1.dp, if (focused) Color.White else PickerStroke),
+            border = BorderStroke(if (focused) 4.dp else 1.dp, if (focused) TvDesign.Accent else PickerStroke),
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(Icons.Default.Add, contentDescription = "Add Profile", tint = if (focused) Color.White else PickerMuted, modifier = Modifier.size(42.dp))
@@ -1196,8 +1198,8 @@ private fun TvAvatarChoice(
             .border(
                 width = if (focused) 4.dp else if (selected) 3.dp else 1.dp,
                 color = when {
-                    focused -> Color.White
-                    selected -> PickerGreen
+                    focused -> TvDesign.Accent
+                    selected -> PickerAccent
                     else -> PickerStroke
                 },
                 shape = CircleShape,
@@ -1209,11 +1211,11 @@ private fun TvAvatarChoice(
             Surface(
                 modifier = Modifier.align(Alignment.BottomEnd).size(22.dp),
                 shape = CircleShape,
-                color = PickerGreen,
+                color = PickerAccent,
                 border = BorderStroke(2.dp, PickerBlack),
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Text("✓", color = Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                    Text("✓", color = TvDesign.OnAccent, fontSize = 10.sp, fontWeight = FontWeight.Black)
                 }
             }
         }
@@ -1224,13 +1226,13 @@ private fun TvAvatarChoice(
 private fun TvProfileBadge(label: String) {
     Surface(
         shape = RoundedCornerShape(50),
-        color = PickerGreen.copy(alpha = .10f),
-        border = BorderStroke(1.dp, PickerGreen.copy(alpha = .34f)),
+        color = PickerAccent.copy(alpha = .10f),
+        border = BorderStroke(1.dp, PickerAccent.copy(alpha = .34f)),
     ) {
         Text(
             text = label,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-            color = PickerGreen,
+            color = PickerAccent,
             fontSize = 9.sp,
             fontWeight = FontWeight.Black,
         )
@@ -1239,15 +1241,15 @@ private fun TvProfileBadge(label: String) {
 
 @Composable
 private fun profileSwitchColors() = SwitchDefaults.colors(
-    checkedThumbColor = PickerBlack,
-    checkedTrackColor = PickerGreen,
-    checkedBorderColor = PickerGreen,
+    checkedThumbColor = TvDesign.OnAccent,
+    checkedTrackColor = PickerAccent,
+    checkedBorderColor = PickerAccent,
     uncheckedThumbColor = PickerMuted,
     uncheckedTrackColor = PickerPanelRaised,
     uncheckedBorderColor = PickerStroke,
-    disabledCheckedThumbColor = PickerBlack.copy(alpha = .5f),
-    disabledCheckedTrackColor = PickerGreen.copy(alpha = .35f),
-    disabledCheckedBorderColor = PickerGreen.copy(alpha = .35f),
+    disabledCheckedThumbColor = TvDesign.OnAccent.copy(alpha = .5f),
+    disabledCheckedTrackColor = PickerAccent.copy(alpha = .35f),
+    disabledCheckedBorderColor = PickerAccent.copy(alpha = .35f),
     disabledUncheckedThumbColor = PickerMuted.copy(alpha = .35f),
     disabledUncheckedTrackColor = PickerPanel,
     disabledUncheckedBorderColor = PickerStroke,
@@ -1274,7 +1276,7 @@ private fun TvPickerToggleRow(
             .scale(scale)
             .onFocusChanged { focused = it.isFocused }
             .background(if (focused && enabled) PickerPanelRaised else PickerPanel, RoundedCornerShape(18.dp))
-            .border(if (focused && enabled) 2.dp else 1.dp, if (focused && enabled) Color.White else PickerStroke, RoundedCornerShape(18.dp))
+            .border(if (focused && enabled) 2.dp else 1.dp, if (focused && enabled) TvDesign.Accent else PickerStroke, RoundedCornerShape(18.dp))
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1303,7 +1305,7 @@ private fun TvEditorToggleRow(
             .height(68.dp)
             .onFocusChanged { focused = it.isFocused }
             .background(if (focused) PickerPanelRaised else PickerPanel, RoundedCornerShape(17.dp))
-            .border(if (focused) 2.dp else 1.dp, if (focused) Color.White else PickerStroke, RoundedCornerShape(17.dp))
+            .border(if (focused) 2.dp else 1.dp, if (focused) TvDesign.Accent else PickerStroke, RoundedCornerShape(17.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1354,13 +1356,13 @@ private fun TvProfileAction(
         !enabled -> PickerPanel.copy(alpha = .55f)
         danger && focused -> PickerDanger.copy(alpha = .20f)
         danger -> PickerDanger.copy(alpha = .10f)
-        primary -> if (focused) Color.White else PickerGreen
-        focused -> Color.White.copy(alpha = .16f)
+        primary -> PickerAccent
+        focused -> TvDesign.Accent.copy(alpha = .16f)
         else -> PickerPanel
     }
     val foreground = when {
         !enabled -> PickerMuted.copy(alpha = .5f)
-        primary -> if (focused) Color.Black else Color.Black
+        primary -> TvDesign.OnAccent
         danger -> PickerDanger
         else -> Color.White
     }
@@ -1373,7 +1375,7 @@ private fun TvProfileAction(
             .scale(scale)
             .onFocusChanged { focused = it.isFocused }
             .background(background, RoundedCornerShape(50))
-            .border(if (focused && enabled) 2.dp else 1.dp, if (focused && enabled) Color.White else PickerStroke, RoundedCornerShape(50))
+            .border(if (focused && enabled) 2.dp else 1.dp, if (focused && enabled) TvDesign.Accent else PickerStroke, RoundedCornerShape(50))
             .clickable(enabled = enabled, onClick = onClick),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
@@ -1403,8 +1405,8 @@ private fun TvIconAction(
             .size(48.dp)
             .scale(scale)
             .onFocusChanged { focused = it.isFocused }
-            .background(if (focused) Color.White.copy(alpha = .16f) else PickerPanel, CircleShape)
-            .border(if (focused) 2.dp else 1.dp, if (focused) Color.White else PickerStroke, CircleShape)
+            .background(if (focused) TvDesign.Accent.copy(alpha = .16f) else PickerPanel, CircleShape)
+            .border(if (focused) 2.dp else 1.dp, if (focused) TvDesign.Accent else PickerStroke, CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {

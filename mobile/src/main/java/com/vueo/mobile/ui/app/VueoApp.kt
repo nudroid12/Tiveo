@@ -953,7 +953,7 @@ fun VueoApp(
             AppSurface.ROOT -> Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            Surface(color = Color(0xFF101010)) {
+            Surface(color = VueoPalette.Nav) {
                 Row(
                     Modifier.fillMaxWidth().navigationBarsPadding().height(60.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1335,6 +1335,7 @@ fun VueoApp(
                                     )
 
                                     profileStore.ensureDefaultProfile()
+                                    VueoPalette.applyTheme(settingsStore.appTheme())
                                     VueoPalette.applyAccent(
                                         settingsStore.appAccent()
                                     )
@@ -1425,9 +1426,9 @@ private fun RowScope.BottomTab(
             NavigationBarItemDefaults
                 .colors(
                     selectedIconColor =
-                        Color.White,
+                        VueoPalette.Accent,
                     selectedTextColor =
-                        Color.White,
+                        VueoPalette.Accent,
                     indicatorColor =
                         Color.Transparent,
                     unselectedIconColor =

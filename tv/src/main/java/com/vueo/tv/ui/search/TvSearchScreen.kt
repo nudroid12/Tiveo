@@ -610,7 +610,7 @@ internal fun TvSearchScreen(
                         modifier = Modifier
                             .fillMaxWidth(.82f)
                             .height(1.dp),
-                        color = TvDesign.White.copy(alpha = .90f),
+                        color = TvDesign.Accent.copy(alpha = .90f),
                         trackColor = TvDesign.White.copy(alpha = .08f),
                     )
                 } else {
@@ -859,7 +859,7 @@ internal fun TvSearchScreen(
                 searching -> {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(
-                            color = TvDesign.White,
+                            color = TvDesign.Accent,
                             strokeWidth = 2.dp,
                             modifier = Modifier.size(28.dp),
                         )
@@ -931,7 +931,7 @@ private fun TvMobileSearchField(
             .background(TvDesign.SurfaceRaised)
             .border(
                 width = if (focused) 1.5.dp else 1.dp,
-                color = if (focused) TvDesign.White.copy(alpha = .86f)
+                color = if (focused) TvDesign.Accent.copy(alpha = .86f)
                 else TvDesign.White.copy(alpha = .13f),
                 shape = shape,
             )
@@ -1079,12 +1079,12 @@ private fun TvSearchModeToggle(
                 )
             }
             .background(
-                if (focused) TvDesign.White.copy(alpha = .10f) else Color.Transparent,
+                if (focused) TvDesign.Accent.copy(alpha = .10f) else Color.Transparent,
                 shape,
             )
             .border(
                 width = if (focused) 1.dp else 0.dp,
-                color = if (focused) TvDesign.White.copy(alpha = .70f) else Color.Transparent,
+                color = if (focused) TvDesign.Accent.copy(alpha = .70f) else Color.Transparent,
                 shape = shape,
             )
             .padding(horizontal = 10.dp, vertical = 7.dp),
@@ -1093,7 +1093,7 @@ private fun TvSearchModeToggle(
     ) {
         Text(
             text = "Title",
-            color = if (mode == TvSearchMode.TITLE) TvDesign.White else TvDesign.Muted,
+            color = if (mode == TvSearchMode.TITLE) TvDesign.Accent else TvDesign.Muted,
             fontSize = 11.sp,
             fontWeight = if (mode == TvSearchMode.TITLE) FontWeight.Bold else FontWeight.Medium,
         )
@@ -1102,7 +1102,7 @@ private fun TvSearchModeToggle(
                 .width(38.dp)
                 .height(20.dp)
                 .clip(RoundedCornerShape(50.dp))
-                .background(TvDesign.White.copy(alpha = .92f))
+                .background(TvDesign.Accent.copy(alpha = .92f))
                 .padding(3.dp),
         ) {
             Box(
@@ -1115,7 +1115,7 @@ private fun TvSearchModeToggle(
         }
         Text(
             text = "Actor",
-            color = if (mode == TvSearchMode.ACTOR) TvDesign.White else TvDesign.Muted,
+            color = if (mode == TvSearchMode.ACTOR) TvDesign.Accent else TvDesign.Muted,
             fontSize = 11.sp,
             fontWeight = if (mode == TvSearchMode.ACTOR) FontWeight.Bold else FontWeight.Medium,
         )
@@ -1169,12 +1169,12 @@ private fun TvSearchFilterButton(
             }
             .clickable(onClick = onClick)
             .background(
-                if (focused) TvDesign.White else Color.Transparent,
+                if (focused) TvDesign.Accent else Color.Transparent,
                 shape,
             )
             .border(
                 width = if (focused) 1.dp else 0.dp,
-                color = if (focused) TvDesign.White else Color.Transparent,
+                color = if (focused) TvDesign.Accent else Color.Transparent,
                 shape = shape,
             )
             .padding(horizontal = 14.dp, vertical = 7.dp),
@@ -1183,7 +1183,7 @@ private fun TvSearchFilterButton(
     ) {
         Text(
             text = label,
-            color = if (focused) TvDesign.Black.copy(alpha = .82f) else TvDesign.White,
+            color = if (focused) TvDesign.OnAccent.copy(alpha = .82f) else TvDesign.White,
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
@@ -1191,7 +1191,7 @@ private fun TvSearchFilterButton(
         )
         Text(
             text = "⌄",
-            color = if (focused) TvDesign.Black.copy(alpha = .58f) else TvDesign.Muted,
+            color = if (focused) TvDesign.OnAccent.copy(alpha = .58f) else TvDesign.Muted,
             fontSize = 13.sp,
             fontWeight = FontWeight.Bold,
         )
@@ -1268,7 +1268,7 @@ private fun TvSearchPosterTile(
                 .clip(RoundedCornerShape(10.dp))
                 .border(
                     width = if (focused) 1.dp else 0.dp,
-                    color = if (focused) TvDesign.White.copy(alpha = .88f) else Color.Transparent,
+                    color = if (focused) TvDesign.Accent.copy(alpha = .88f) else Color.Transparent,
                     shape = RoundedCornerShape(10.dp),
                 ),
             contentScale = ContentScale.Crop,
@@ -1391,15 +1391,15 @@ private fun TvSearchChoiceRow(
             .clickable(onClick = onClick)
             .background(
                 when {
-                    focused -> TvDesign.White.copy(alpha = .14f)
-                    selected -> TvDesign.White.copy(alpha = .07f)
+                    focused -> TvDesign.Accent.copy(alpha = .14f)
+                    selected -> TvDesign.Accent.copy(alpha = .07f)
                     else -> Color.Transparent
                 },
                 shape,
             )
             .border(
                 width = if (focused) 1.dp else 0.dp,
-                color = if (focused) TvDesign.White.copy(alpha = .78f) else Color.Transparent,
+                color = if (focused) TvDesign.Accent.copy(alpha = .78f) else Color.Transparent,
                 shape = shape,
             )
             .padding(horizontal = 14.dp, vertical = 12.dp),
@@ -1411,7 +1411,7 @@ private fun TvSearchChoiceRow(
                 .clip(CircleShape)
                 .border(
                     1.dp,
-                    if (selected) TvDesign.White else TvDesign.Muted,
+                    if (selected) TvDesign.Accent else TvDesign.Muted,
                     CircleShape,
                 ),
             contentAlignment = Alignment.Center,
@@ -1421,7 +1421,7 @@ private fun TvSearchChoiceRow(
                     Modifier
                         .size(8.dp)
                         .clip(CircleShape)
-                        .background(TvDesign.White),
+                        .background(TvDesign.Accent),
                 )
             }
         }

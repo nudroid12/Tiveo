@@ -737,7 +737,7 @@ internal fun HomeScreen(
             Modifier
                 .fillMaxSize()
                 .background(
-                    Color(0xFF0B0B0B)
+                    VueoPalette.Background
                 ),
         contentPadding =
             PaddingValues(
@@ -1086,7 +1086,7 @@ private fun HomeFeaturedCarousel(
                             .30f to Color.Transparent,
                             .45f to Color.Transparent,
                             .78f to Color.Black.copy(alpha = .7f),
-                            1f to Color(0xFF0B0B0B),
+                            1f to VueoPalette.Background,
                         ),
                     ))
                     Column(
@@ -1115,7 +1115,7 @@ private fun HomeFeaturedCarousel(
                                 onClick = { onPlay(item) },
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(8.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
+                                colors = ButtonDefaults.buttonColors(containerColor = VueoPalette.Accent, contentColor = VueoPalette.OnAccent),
                                 contentPadding = PaddingValues(horizontal = 8.dp),
                             ) {
                                 Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -1152,7 +1152,7 @@ private fun HomeFeaturedCarousel(
                     val active = index == pager.currentPage
                     Box(
                         Modifier.width(if (active) 18.dp else 5.dp).height(5.dp)
-                            .background(Color.White.copy(alpha = if (active) 1f else .38f), RoundedCornerShape(50)),
+                            .background(VueoPalette.Accent.copy(alpha = if (active) 1f else .38f), RoundedCornerShape(50)),
                     )
                 }
             }

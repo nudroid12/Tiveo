@@ -1,5 +1,7 @@
 package com.vueo.tv.home
 
+import com.vueo.tv.ui.TvDesign
+
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -224,7 +226,7 @@ internal fun TiveoTopBar(
                 ) {
                     Text(
                         text = if (tab == "Library") "My List" else tab,
-                        color = if (isSelected) Color.White else Color.White.copy(alpha = .76f),
+                        color = if (isSelected) TvDesign.Accent else Color.White.copy(alpha = .76f),
                         fontSize = 16.sp,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
@@ -253,7 +255,7 @@ internal fun TiveoTopBar(
                 val y = selectedBounds.bottom - bounds.top - 3.dp.toPx()
                 val halfWidth = (width - 2.dp.toPx()).coerceAtLeast(0f) / 2f
                 drawLine(
-                    color = Color.White.copy(alpha = barAlpha),
+                    color = TvDesign.Accent.copy(alpha = barAlpha),
                     start = Offset(center - halfWidth, y),
                     end = Offset(center + halfWidth, y),
                     strokeWidth = 2.dp.toPx(),

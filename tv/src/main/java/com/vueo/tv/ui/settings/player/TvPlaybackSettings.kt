@@ -225,19 +225,19 @@ internal fun TvAppearanceSettings(
     onBack: () -> Unit,
 ) {
     val store = runtime.settingsStore
-    var theme by remember { mutableStateOf(store.appTheme()) }
-    var accent by remember { mutableStateOf(store.appAccent()) }
+    val theme = TvDesign.Theme
+    val accent = TvDesign.AccentChoice
 
     val entries = listOf(
         choiceEntry("theme", "Theme", "Choose the dark cinematic base palette.", theme.label, {
-            theme = cycle(AppTheme.entries, theme, -1); store.setAppTheme(theme); TvDesign.applyTheme(theme)
+            val next = cycle(AppTheme.entries, TvDesign.Theme, -1); store.setAppTheme(next); TvDesign.applyTheme(next)
         }, {
-            theme = cycle(AppTheme.entries, theme, 1); store.setAppTheme(theme); TvDesign.applyTheme(theme)
+            val next = cycle(AppTheme.entries, TvDesign.Theme, 1); store.setAppTheme(next); TvDesign.applyTheme(next)
         }).copy(section = "LOOK & FEEL", icon = Icons.Default.Settings),
-        choiceEntry("accent", "Accent", "Selection, progress and semantic accents.", accent.label, {
-            accent = cycle(AppAccent.entries, accent, -1); store.setAppAccent(accent); TvDesign.applyAccent(accent)
+        choiceEntry("accent", "Accent", "Buttons, focus, selection and progress throughout the app.", accent.label, {
+            val next = cycle(AppAccent.entries, TvDesign.AccentChoice, -1); store.setAppAccent(next); TvDesign.applyAccent(next)
         }, {
-            accent = cycle(AppAccent.entries, accent, 1); store.setAppAccent(accent); TvDesign.applyAccent(accent)
+            val next = cycle(AppAccent.entries, TvDesign.AccentChoice, 1); store.setAppAccent(next); TvDesign.applyAccent(next)
         }).copy(section = "LOOK & FEEL"),
     )
     TvSettingsListScreen("Appearance", "Choose a dark Tiveo palette and tune the interactive accent.", entries, onNavigate, onProfile, onBack)

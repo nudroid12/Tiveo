@@ -1,5 +1,9 @@
 package com.vueo.tv
 
+import com.vueo.tv.ui.TvDesign
+
+import com.vueo.shared.core.storage.SettingsStore
+
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
@@ -24,6 +28,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 
 class MainActivity : ComponentActivity() {
+    private var appearanceObserver: AutoCloseable? = null
     private val motionBackShortcut = TvMotionBackShortcut()
     private val exitHandler = Handler(Looper.getMainLooper())
     private var pendingChannelLink by mutableStateOf<String?>(null)
@@ -39,6 +44,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         RuntimeDiagnostics.install(applicationContext)
+        appearanceObserver = SettingsStore(applicationContext).observeAppearance { theme, accent ->
+            TvDesign.applyTheme(theme)
+            TvDesign.applyAccent(accent)
+        }
         pendingWatchNextMediaKey = TvWatchNextDeepLink.parseMediaKey(intent?.data)
         pendingChannelLink = intent?.data?.takeIf(com.vueo.tv.channels.TvHomeChannels::accepts)?.toString()
 
@@ -67,6 +76,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        appearanceObserver?.close()
+        appearanceObserver = null
+        super.onDestroy()
     }
 
     override fun onNewIntent(intent: Intent) {

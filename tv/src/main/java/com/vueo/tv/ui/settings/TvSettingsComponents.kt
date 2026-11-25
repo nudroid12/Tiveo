@@ -574,7 +574,7 @@ private fun TvSettingsCategoryRow(
             }
             .background(
                 when {
-                    showFocus -> TvDesign.White
+                    showFocus -> TvDesign.Accent
                     selected -> TvDesign.SurfaceRaised.copy(alpha = .55f)
                     else -> Color.Transparent
                 },
@@ -586,7 +586,7 @@ private fun TvSettingsCategoryRow(
     ) {
         Text(
             text = category.title,
-            color = if (showFocus) TvDesign.Black else if (selected) TvDesign.White else TvDesign.Muted,
+            color = if (showFocus) TvDesign.OnAccent else if (selected) TvDesign.White else TvDesign.Muted,
             fontSize = 16.sp,
             fontWeight = if (showFocus || selected) FontWeight.SemiBold else FontWeight.Medium,
             modifier = Modifier.weight(1f),
@@ -596,7 +596,7 @@ private fun TvSettingsCategoryRow(
         Spacer(Modifier.width(12.dp))
         Text(
             text = "›",
-            color = if (showFocus) TvDesign.Black else if (selected) TvDesign.Muted else Color.Transparent,
+            color = if (showFocus) TvDesign.OnAccent else if (selected) TvDesign.Muted else Color.Transparent,
             fontSize = 20.sp,
         )
     }
@@ -677,7 +677,7 @@ internal fun TvSettingsProfilePanel(
                     .background(if (profileFocused) TvDesign.SurfaceRaised else TvDesign.Surface)
                     .border(
                         if (profileFocused) 1.5.dp else 0.dp,
-                        if (profileFocused) TvDesign.White.copy(alpha = .88f) else TvDesign.White.copy(alpha = 0f),
+                        if (profileFocused) TvDesign.Accent.copy(alpha = .88f) else TvDesign.White.copy(alpha = 0f),
                         RoundedCornerShape(15.dp),
                     )
                     .focusable()
@@ -782,10 +782,10 @@ internal fun TvSettingsProfilePanel(
                         }
                     }
                     .clip(RoundedCornerShape(14.dp))
-                    .background(if (switchFocused) TvDesign.White else TvDesign.Surface)
+                    .background(if (switchFocused) TvDesign.Accent else TvDesign.Surface)
                     .border(
                         if (switchFocused) 1.5.dp else 1.dp,
-                        if (switchFocused) TvDesign.White else TvDesign.White.copy(alpha = .06f),
+                        if (switchFocused) TvDesign.Accent else TvDesign.White.copy(alpha = .06f),
                         RoundedCornerShape(14.dp),
                     )
                     .focusable()
@@ -795,14 +795,14 @@ internal fun TvSettingsProfilePanel(
             ) {
                 Text(
                     text = "⇄",
-                    color = if (switchFocused) TvDesign.Black else TvDesign.White,
+                    color = if (switchFocused) TvDesign.OnAccent else TvDesign.White,
                     fontSize = 19.sp,
                     fontWeight = FontWeight.Bold,
                 )
                 Spacer(Modifier.width(9.dp))
                 Text(
                     text = "Switch Profiles",
-                    color = if (switchFocused) TvDesign.Black else TvDesign.White,
+                    color = if (switchFocused) TvDesign.OnAccent else TvDesign.White,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
                 )
@@ -1371,7 +1371,7 @@ internal fun TvSettingsRow(
             }
             .background(
                 when {
-                    focused -> TvDesign.White
+                    focused -> TvDesign.Accent
                     entry.actionCard -> TvDesign.Surface
                     else -> Color.Transparent
                 },
@@ -1413,7 +1413,7 @@ internal fun TvSettingsRow(
             ) {
                 Text(
                     text = entry.badge.orEmpty(),
-                    color = if (focused) TvDesign.Black else TvDesign.Accent,
+                    color = if (focused) TvDesign.OnAccent else TvDesign.Accent,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
@@ -1441,7 +1441,7 @@ internal fun TvSettingsRow(
                         imageVector = icon,
                         contentDescription = null,
                         tint = when {
-                            focused -> TvDesign.Black
+                            focused -> TvDesign.OnAccent
                             !entry.enabled -> TvDesign.Dim
                             entry.accented -> TvDesign.Accent
                             else -> TvDesign.White.copy(alpha = .92f)
@@ -1460,7 +1460,7 @@ internal fun TvSettingsRow(
         ) {
             Text(
                 text = entry.title,
-                color = if (focused) TvDesign.Black else if (entry.enabled) TvDesign.White else TvDesign.Dim,
+                color = if (focused) TvDesign.OnAccent else if (entry.enabled) TvDesign.White else TvDesign.Dim,
                 fontSize = 16.sp,
                 fontWeight = if (focused) FontWeight.SemiBold else FontWeight.Medium,
                 maxLines = 1,
@@ -1469,7 +1469,7 @@ internal fun TvSettingsRow(
             if (entry.subtitle.isNotBlank()) {
                 Text(
                     text = entry.subtitle,
-                    color = if (focused) TvDesign.Black else if (entry.enabled) TvDesign.Muted else TvDesign.Dim.copy(alpha = .65f),
+                    color = if (focused) TvDesign.OnAccent else if (entry.enabled) TvDesign.Muted else TvDesign.Dim.copy(alpha = .65f),
                     fontSize = 12.sp,
                     lineHeight = 15.sp,
                     maxLines = 2,
@@ -1488,7 +1488,7 @@ internal fun TvSettingsRow(
                         val selected = choiceIndex == selectedIndex
                         Text(
                             text = choice,
-                            color = if (focused) TvDesign.Black else if (selected) TvDesign.White else TvDesign.Muted,
+                            color = if (focused) TvDesign.OnAccent else if (selected) TvDesign.White else TvDesign.Muted,
                             fontSize = 12.sp,
                             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
                             maxLines = 1,
@@ -1513,7 +1513,7 @@ internal fun TvSettingsRow(
             entry.detail?.takeIf { it.isNotBlank() }?.let { detail ->
                 Text(
                     text = detail,
-                    color = if (focused) TvDesign.Black else if (entry.enabled) TvDesign.Dim else TvDesign.Dim.copy(alpha = .52f),
+                    color = if (focused) TvDesign.OnAccent else if (entry.enabled) TvDesign.Dim else TvDesign.Dim.copy(alpha = .52f),
                     fontSize = 9.5.sp,
                     lineHeight = 13.sp,
                     maxLines = 1,
@@ -1521,7 +1521,7 @@ internal fun TvSettingsRow(
                 )
             }
             entry.operationStatus?.takeIf { it.isNotBlank() }?.let { message ->
-                Text(message, color = if (focused) TvDesign.Black else TvDesign.Accent, fontSize = 11.sp, lineHeight = 15.sp,
+                Text(message, color = if (focused) TvDesign.OnAccent else TvDesign.Accent, fontSize = 11.sp, lineHeight = 15.sp,
                     maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
@@ -1543,7 +1543,7 @@ internal fun TvSettingsRow(
                     },
                     color = when {
                         !entry.enabled -> TvDesign.Dim
-                        focused -> TvDesign.Black
+                        focused -> TvDesign.OnAccent
                         entry.accented -> TvDesign.Accent
                         else -> TvDesign.Muted
                     },
@@ -1567,7 +1567,7 @@ internal fun TvSettingsRow(
             } else if (entry.onActivate != null && entry.rightActionLabel.isNullOrBlank()) {
                 Text(
                     text = "›",
-                    color = if (focused) TvDesign.Black else TvDesign.Dim,
+                    color = if (focused) TvDesign.OnAccent else TvDesign.Dim,
                     fontSize = 19.sp,
                     fontWeight = FontWeight.Light,
                 )
@@ -1612,12 +1612,12 @@ internal fun TvSecretVisibilityButton(
                 onFocus(it.isFocused)
             }
             .background(
-                if (focused) TvDesign.White.copy(alpha = .12f) else Color.Transparent,
+                if (focused) TvDesign.Accent.copy(alpha = .12f) else Color.Transparent,
                 CircleShape,
             )
             .border(
                 if (focused) 2.dp else 0.dp,
-                if (focused) TvDesign.White else Color.Transparent,
+                if (focused) TvDesign.Accent else Color.Transparent,
                 CircleShape,
             ),
     ) {
@@ -1725,7 +1725,7 @@ internal fun TvTextEntryDialog(
         message?.takeIf { it.isNotBlank() }?.let {
             Text(it, color = TvDesign.Muted, fontSize = 12.sp)
         }
-        if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = TvDesign.White)
+        if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = TvDesign.Accent)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)) {
             val above = inputFocus
             TvDialogButton(
@@ -1920,7 +1920,7 @@ private fun TvAddonControls(
                                 } else false
                             }
                             .background(if (focused) TvDesign.SurfaceRaised else TvDesign.Surface, shape)
-                            .border(1.dp, if (focused) TvDesign.White else TvDesign.White.copy(alpha = .12f), shape)
+                            .border(1.dp, if (focused) TvDesign.Accent else TvDesign.White.copy(alpha = .12f), shape)
                             .focusable(),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.Center,
@@ -2037,7 +2037,7 @@ private fun TvSubtitleFontSettingsCard(
                 }
             }
             .background(TvDesign.Surface, shape)
-            .border(1.dp, TvDesign.White.copy(alpha = if (focused) .28f else .045f), shape)
+            .border(1.dp, (if (focused) TvDesign.Accent.copy(alpha = .28f) else TvDesign.White.copy(alpha = .045f)), shape)
             .focusable(enabled = entry.enabled)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),

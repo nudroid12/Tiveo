@@ -120,8 +120,8 @@ internal fun TvVueoSyncSettings(onNavigate: (String)->Unit,onProfile: ()->Unit,o
                         .border(2.dp, if (focused) TvDesign.Black else Color.Transparent, RoundedCornerShape(8.dp)),
                     shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = TvDesign.White,
-                        contentColor = TvDesign.Black,
+                        containerColor = TvDesign.Accent,
+                        contentColor = TvDesign.OnAccent,
                     ),
                 ) { Text(if (busy) "Please wait…" else "Sign In") }
             }))
