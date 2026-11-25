@@ -240,6 +240,7 @@ fun VueoTvApp(
         onDispose { TvMotionBackShortcut.allowed = false }
     }
     var sourceDiscoverySnapshot by remember { mutableStateOf<TvSourceDiscoverySnapshot?>(null) }
+    var sourceOpenFailureKey by remember { mutableStateOf<String?>(null) }
     var sourceDiscoveryError by remember { mutableStateOf<String?>(null) }
     var sourceDiscoveryKey by remember { mutableStateOf<String?>(null) }
     // Keep the final Sources frame alive while AnimatedContent fades the route out.
@@ -784,6 +785,13 @@ fun VueoTvApp(
         }
     }
 
+    fun holdSourceExitState(key: String) {
+        sourceExitKey = key
+        sourceExitSnapshot = sourceDiscoverySnapshot.takeIf { sourceDiscoveryKey == key }
+        sourceExitError = sourceDiscoveryError.takeIf { sourceDiscoveryKey == key }
+        sourceExitRunning = sourceDiscoveryJob?.isActive == true && sourceDiscoveryKey == key
+    }
+
     fun stopSourceDiscovery(markStopped: Boolean) {
         sourceDiscoveryGeneration += 1
         sourceDiscoveryJob?.cancel()
@@ -794,6 +802,7 @@ fun VueoTvApp(
                 if (!current.searching) current
                 else current.copy(
                     searching = false,
+                    sourcesStopped = true,
                     loadingProviders = emptyList(),
                     progress = if (current.bundle.sources.isEmpty()) {
                         "Discovery stopped"
@@ -801,8 +810,23 @@ fun VueoTvApp(
                         "Discovery stopped • ${current.bundle.sources.size} unique sources"
                     },
                 )
+            } ?: selectedMedia?.let { media ->
+                sourceDiscoveryKey = sourceSessionKey(media, selectedEpisode)
+                TvSourceDiscoverySnapshot(
+                    bundle = TvSourceBundle(selectedEpisode?.id ?: media.id, emptyList(), emptyList()),
+                    rawCount = 0,
+                    notice = null,
+                    searching = false,
+                    progress = "Discovery stopped",
+                    firstResultMs = null,
+                    providerOrder = emptyList(),
+                    fromCache = false,
+                    subtitlesResolved = false,
+                    sourcesStopped = true,
+                )
             }
         } else {
+            sourceOpenFailureKey = null
             sourceDiscoveryKey = null
             sourceDiscoverySnapshot = null
             sourceDiscoveryError = null
@@ -1055,6 +1079,7 @@ fun VueoTvApp(
                 ?: return
 
             launcherAutoPlayKey = null
+            holdSourceExitState(key)
             sourceBundle = next
             selectedSource = candidate
             sourceDiscoveryControl?.stopPlugins()
@@ -1125,7 +1150,10 @@ fun VueoTvApp(
                     sourceDiscoveryKey == key
                 ) {
                     sourceDiscoveryError = throwable.message ?: "Source discovery failed"
-                    sourceDiscoverySnapshot = sourceDiscoverySnapshot?.copy(searching = false)
+                    sourceDiscoverySnapshot = sourceDiscoverySnapshot?.copy(
+                        searching = false,
+                        loadingProviders = emptyList(),
+                    )
                     failedSourceKeys = failedSourceKeys + key
                 }
             } finally {
@@ -1467,17 +1495,18 @@ fun VueoTvApp(
                     } else {
                         val sessionKey = sourceSessionKey(media, selectedEpisode)
                         val leavingSource = route != TvRoute.SOURCE
-                        val displayedSnapshot = if (leavingSource) {
-                            sourceExitSnapshot.takeIf { sourceExitKey == sessionKey }
+                        val holdingExit = leavingSource && sourceExitKey == sessionKey
+                        val displayedSnapshot = if (holdingExit) {
+                            sourceExitSnapshot
                         } else {
                             sourceDiscoverySnapshot.takeIf { sourceDiscoveryKey == sessionKey }
                         }
-                        val displayedError = if (leavingSource) {
-                            sourceExitError.takeIf { sourceExitKey == sessionKey }
+                        val displayedError = if (holdingExit) {
+                            sourceExitError
                         } else {
                             sourceDiscoveryError.takeIf { sourceDiscoveryKey == sessionKey }
                         }
-                        val displayedRunning = if (leavingSource && sourceExitKey == sessionKey) {
+                        val displayedRunning = if (holdingExit) {
                             sourceExitRunning
                         } else {
                             sourceDiscoveryJob?.isActive == true && sourceDiscoveryKey == sessionKey
@@ -1495,25 +1524,17 @@ fun VueoTvApp(
                         }
 
                         TvSourceScreen(
+                            active = !leavingSource,
                             runtime = runtime,
                             media = media,
                             episode = selectedEpisode,
                             discovery = displayedSnapshot,
                             discoveryRunning = displayedRunning,
                             discoveryError = displayedError,
+                            sourceOpenFailed = sourceOpenFailureKey == sessionKey,
                             onBack = {
                                 launcherAutoPlayKey = null
-                                // AnimatedContent keeps the outgoing Sources composable alive briefly.
-                                // Hold its last visible state while cancelling the real discovery state,
-                                // otherwise the outgoing frame flashes "No playable sources".
-                                sourceExitSnapshot = sourceDiscoverySnapshot.takeIf {
-                                    sourceDiscoveryKey == sessionKey
-                                }
-                                sourceExitError = sourceDiscoveryError.takeIf {
-                                    sourceDiscoveryKey == sessionKey
-                                }
-                                sourceExitKey = sessionKey
-                                sourceExitRunning = sourceDiscoveryJob?.isActive == true
+                                holdSourceExitState(sessionKey)
                                 stopSourceDiscovery(markStopped = false)
                                 detailReturnedFromSource = sourceReturnRoute == TvRoute.DETAIL
                                 if (detailReturnedFromSource) {
@@ -1524,12 +1545,16 @@ fun VueoTvApp(
                                 route = sourceReturnRoute
                             },
                             onRefresh = {
+                                sourceOpenFailureKey = null
                                 startSourceDiscovery(media, selectedEpisode, force = true)
                             },
                             onStop = {
                                 stopSourceDiscovery(markStopped = true)
                             },
-                            onPlay = { bundle, source ->
+                            onPlay = play@{ bundle, source ->
+                                if (route != TvRoute.SOURCE) return@play
+                                sourceOpenFailureKey = null
+                                holdSourceExitState(sessionKey)
                                 sourceBundle = bundle
                                 selectedSource = source
                                 sourceDiscoveryControl?.stopPlugins()
@@ -1575,6 +1600,11 @@ fun VueoTvApp(
                                 onBack = {
                                     cancelEpisodeSwitch()
                                     route = playerReturnRoute
+                                },
+                                onSourceOpenFailed = if (playerReturnRoute == TvRoute.SOURCE) {
+                                    { sourceOpenFailureKey = sourceSessionKey(media, selectedEpisode) }
+                                } else {
+                                    null
                                 },
                                 onLibraryChanged = { notifyLibraryChanged() },
                                 onPlayNextEpisode = { target, current -> startEpisodeSwitch(target, preferredSource = current) },
