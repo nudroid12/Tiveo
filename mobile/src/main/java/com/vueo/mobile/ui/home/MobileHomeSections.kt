@@ -789,6 +789,7 @@ internal fun HomePersonalizedSection(
         (MediaItem) -> Unit,
     onMediaHold:
         (MediaItem, IntOffset) -> Unit,
+    episodeBadges: Map<String, String> = emptyMap(),
 ) {
     Column(
         verticalArrangement =
@@ -822,6 +823,7 @@ internal fun HomePersonalizedSection(
                 item ->
                 MediaPoster(
                     item = item,
+                    newEpisodeLabel = episodeBadges["${item.type}:${item.id}"],
                     onClick = {
                         onMediaClick(
                             item

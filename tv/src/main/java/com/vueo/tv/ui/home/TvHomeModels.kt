@@ -27,6 +27,7 @@ internal sealed interface TvHomeEntry {
     data class Media(
         override val key: String,
         override val media: MediaItem,
+        val newEpisodeLabel: String? = null,
     ) : TvHomeEntry
 
     data class Folder(
@@ -44,6 +45,8 @@ internal sealed interface TvHomeEntry {
     ) : TvHomeEntry
 }
 
+internal const val NEW_EPISODES_ROW_KEY = "new-episodes"
+
 internal enum class TvHomeRowKind {
     CONTINUE_WATCHING,
     POSTERS,
@@ -57,6 +60,9 @@ internal data class TvHomeRow(
     val entries: List<TvHomeEntry>,
     val providerName: String? = null,
 )
+
+internal fun TvHomeRow.isDynamicEpisodeRail(): Boolean =
+    kind == TvHomeRowKind.CONTINUE_WATCHING || key == NEW_EPISODES_ROW_KEY
 
 /**
  * Small process-lifetime focus snapshot, equivalent to the focus state Vueo
@@ -80,6 +86,7 @@ internal data class HomeRouteFocusAnchor(
     val horizontalFirstCardKey: String? = null,
     val rowCardKeys: List<String> = emptyList(),
     val restoreReady: Boolean = true,
+    val capturedRowIndex: Int = -1,
 )
 
 internal object TvHomeFocusMemory {
@@ -133,6 +140,7 @@ internal fun TvHomeEntry.heroSecondaryMeta(): String {
             episodeText()?.let(::add)
             remainingText()?.let(::add)
         } else {
+            (this@heroSecondaryMeta as? TvHomeEntry.Media)?.newEpisodeLabel?.let { add("New episode · $it") }
             media.runtimeMinutes?.takeIf { it > 0 }?.let { add(formatMinutes(it.toLong())) }
         }
     }

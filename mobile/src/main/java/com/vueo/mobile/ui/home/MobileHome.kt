@@ -1,5 +1,11 @@
 package com.vueo.mobile.ui
 
+import com.vueo.shared.core.storage.NewEpisodesPolicy
+
+import com.vueo.shared.core.storage.NewEpisodesPreferences
+
+import com.vueo.shared.core.storage.NewEpisodeEntry
+
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.ButtonDefaults
 
@@ -342,6 +348,23 @@ internal fun HomeScreen(
 ) {
     val context =
         LocalContext.current
+    val newEpisodesPrefs = remember(context) { NewEpisodesPreferences(context) }
+    val newEpisodesPreferenceRevision by NewEpisodesPreferences.revision.collectAsState()
+    val newEpisodesEnabled = remember(activeProfileId, contentVersion, newEpisodesPreferenceRevision) {
+        newEpisodesPrefs.enabled(activeProfileId)
+    }
+    var newEpisodes by remember(activeProfileId) { mutableStateOf<List<NewEpisodeEntry>>(emptyList()) }
+    var newEpisodesScan by remember(activeProfileId) { mutableIntStateOf(0) }
+    LaunchedEffect(activeProfileId, libraryVersion, newEpisodesEnabled, newEpisodesScan) {
+        if (!newEpisodesEnabled) {
+            newEpisodes = emptyList()
+            return@LaunchedEffect
+        }
+        val entries = withContext(Dispatchers.IO) {
+            runCatching { libraryStore.newEpisodeEntries(activeProfileId) }.getOrDefault(emptyList())
+        }
+        if (libraryStore.activeContinueWatchingProfileId() == activeProfileId) newEpisodes = entries
+    }
     val collectionHomeState = com.vueo.shared.collections.ui.rememberCollectionHomeState(activeProfileId)
     val trakt = remember { com.vueo.shared.core.trakt.TraktService.get(context) }
     val traktProfile = trakt.profileId()
@@ -469,13 +492,20 @@ internal fun HomeScreen(
         activeProfileId,
         booting,
         addonsPrepared,
+        newEpisodesEnabled,
         rows.isNotEmpty(),
     ) {
-        if (booting || !addonsPrepared || rows.isEmpty()) return@LaunchedEffect
+        if (booting || !addonsPrepared || (!newEpisodesEnabled && rows.isEmpty())) return@LaunchedEffect
         delay(900L)
-        if (ContinueWatchingMetadataRefresh.refresh(libraryStore, engine::loadMeta)) {
-            onLibraryChanged()
-        }
+        do {
+            if (libraryStore.activeContinueWatchingProfileId() != activeProfileId) return@LaunchedEffect
+            if (ContinueWatchingMetadataRefresh.refresh(libraryStore, engine::loadMeta, includeWatchlist = newEpisodesEnabled)) {
+                onLibraryChanged()
+            }
+            if (!newEpisodesEnabled) break
+            newEpisodesScan += 1
+            delay(NewEpisodesPolicy.REFRESH_INTERVAL_MS)
+        } while (true)
     }
 
     var loading by remember {
@@ -722,6 +752,7 @@ internal fun HomeScreen(
         }
     }
 
+    val visibleNewEpisodes = if (newEpisodesEnabled) newEpisodes.filter { engine.allowsContent(it.media) } else emptyList()
     val visibleFeaturedItems = engine.filterVisible(featuredItems)
     val catalogRows = engine.filterVisibleRows(rows + traktRows)
     val savedFeatured = remember(visibleFeaturedItems, libraryVersion) {
@@ -828,6 +859,19 @@ internal fun HomeScreen(
                         continueWatchingActionAnchor =
                             anchor
                     },
+                )
+            }
+        }
+
+        if (visibleNewEpisodes.isNotEmpty()) {
+            item(key = "home_new_episodes") {
+                HomePersonalizedSection(
+                    title = "New Episodes",
+                    contextLabel = "Recently aired",
+                    items = visibleNewEpisodes.map { it.media },
+                    episodeBadges = visibleNewEpisodes.associate { it.key to it.episodeLabel },
+                    onMediaClick = onMediaClick,
+                    onMediaHold = { item, anchor -> catalogAction = item; catalogActionAnchor = anchor },
                 )
             }
         }
