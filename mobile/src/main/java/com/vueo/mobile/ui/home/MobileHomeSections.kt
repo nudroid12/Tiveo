@@ -295,6 +295,7 @@ private fun HomeContinueWatchingCard(
     onHold: (IntOffset) -> Unit,
 ) {
     val remainingLabel = homeRemainingTimeLabel(entry)
+    val episodeLabel = homeEpisodeLabel(entry)
 
     Surface(
         modifier = Modifier
@@ -330,21 +331,17 @@ private fun HomeContinueWatchingCard(
                     ),
             )
 
-            remainingLabel?.let { remaining ->
-                Surface(
-                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
-                    shape = RoundedCornerShape(10.dp),
-                    color = Color.Black.copy(alpha = .72f),
+            if (episodeLabel != null || remainingLabel != null) {
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .padding(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Text(
-                        text = remaining,
-                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        lineHeight = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                    )
+                    episodeLabel?.let { ContinueWatchingBadge(it) }
+                    Spacer(Modifier.weight(1f))
+                    remainingLabel?.let { ContinueWatchingBadge(it) }
                 }
             }
 
@@ -355,17 +352,6 @@ private fun HomeContinueWatchingCard(
                     .padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                    homeEpisodeLabel(entry)?.let { episode ->
-                        Text(
-                            text = episode,
-                            color = Color.White.copy(alpha = .88f),
-                            fontSize = 10.sp,
-                            lineHeight = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 1,
-                        )
-                    }
-
                     Text(
                         text = entry.media.name,
                         color = Color.White,
@@ -402,6 +388,24 @@ private fun HomeContinueWatchingCard(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun ContinueWatchingBadge(label: String) {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = Color.Black.copy(alpha = .60f),
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            color = Color.White,
+            fontSize = 10.sp,
+            lineHeight = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+        )
     }
 }
 
