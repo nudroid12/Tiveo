@@ -2,8 +2,8 @@ package com.vueo.tv.detail
 
 import com.vueo.tv.ui.motion.*
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import android.os.SystemClock
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -13,6 +13,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -50,7 +51,6 @@ import com.vueo.shared.core.search.MediaEntityTarget
 import com.vueo.tv.ui.TvDesign
 import com.vueo.tv.ui.motion.TvMotion
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** TV Details composition and remote focus map. */
@@ -72,6 +72,7 @@ internal fun TvDetailPresentation(
     val mediaKey = "${state.item.type}:${state.item.id}"
     val listState = rememberLazyListState()
     var movingBetweenSections by remember(mediaKey) { mutableStateOf(false) }
+    var detailHasFocus by remember(mediaKey) { mutableStateOf(false) }
     var heroFocused by remember(mediaKey) { mutableStateOf(false) }
     var episodeToolbarFocused by remember(mediaKey) { mutableStateOf(false) }
     var lastVerticalRepeat by remember(mediaKey) { mutableStateOf(0L) }
@@ -137,8 +138,8 @@ internal fun TvDetailPresentation(
     }
     suspend fun requestSectionFocus(target: FocusRequester, attempts: Int = 8): Boolean {
         repeat(attempts) {
-            withFrameNanos { }
             if (runCatching { target.requestFocus() }.getOrDefault(false)) return true
+            withFrameNanos { }
         }
         return false
     }
@@ -160,12 +161,10 @@ internal fun TvDetailPresentation(
                 if (visibleItem != null) {
                     val destinationOffset = if (index == 0) 0 else
                         (viewport * .42f - visibleItem.size / 2f).toInt()
-                    listState.animateScrollBy(
-                        (visibleItem.offset - destinationOffset).toFloat(),
-                        animationSpec = spring(dampingRatio = .95f, stiffness = 180f),
-                    )
+                    // Place the row before focusing it, without waiting for a scroll animation.
+                    listState.scrollBy((visibleItem.offset - destinationOffset).toFloat())
                 } else {
-                    listState.animateScrollToItem(index, if (index == 0) 0 else -viewport / 2)
+                    listState.scrollToItem(index, if (index == 0) 0 else -viewport / 2)
                 }
                 val focused = requestSectionFocus(target)
                 if (!focused && crossesRelated && navigationGeneration == generation) {
@@ -257,40 +256,35 @@ internal fun TvDetailPresentation(
         label = "detail39ScrimAlpha",
     )
 
-    val entryEpisodeId = remember(mediaKey) {
-        VueoDetailFocusMemory.episodeId.takeIf { VueoDetailFocusMemory.mediaKey == mediaKey }
-    }
-    var entryFocusRestored by remember(mediaKey) { mutableStateOf(false) }
+    // Choose one destination per activation. Later metadata updates must not
+    // move focus away from a control the user has already reached.
     LaunchedEffect(mediaKey, active) {
-        if (!active) return@LaunchedEffect
-        delay(110)
-        if (entryFocusRestored || heroFocused) return@LaunchedEffect
-        // The new title has its own lazy state. Wait for the hero to attach,
-        // rather than issuing one focus request that can fail during loading.
-        listState.scrollToItem(0)
-        repeat(8) {
-            withFrameNanos { }
-            if (entryFocusRestored || heroFocused) return@LaunchedEffect
-            if (runCatching { playRequester.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
-        }
-        if (!entryFocusRestored && !heroFocused) {
-            requestSectionFocus(listRequester, 4)
-        }
-    }
+        if (!active || detailHasFocus) return@LaunchedEffect
 
-    LaunchedEffect(mediaKey, state.selectedEpisode?.id, hasEpisodes, active) {
-        if (!active) return@LaunchedEffect
-        val rememberedEpisodeId = entryEpisodeId
-        val restoreEpisode = state.item.isDetailSeries() &&
-            VueoDetailFocusMemory.mediaKey == mediaKey &&
-            rememberedEpisodeId != null &&
-            rememberedEpisodeId == state.selectedEpisode?.id
-        if (restoreEpisode && hasEpisodes && !entryFocusRestored) {
-            entryFocusRestored = true
+        fun tryFocus(target: FocusRequester): Boolean =
+            runCatching { target.requestFocus() }.getOrDefault(false)
+
+        val rememberedEpisode = VueoDetailFocusMemory.episodeId
+            .takeIf { VueoDetailFocusMemory.mediaKey == mediaKey }
+        val restoreEpisode = hasEpisodes && rememberedEpisode != null &&
+            rememberedEpisode == state.selectedEpisode?.id
+        if (restoreEpisode) {
             listState.scrollToItem(if (hasSeasons) 2 else 1)
-            delay(120)
-            runCatching { episodeRequester.requestFocus() }
+            repeat(8) {
+                if (detailHasFocus || tryFocus(episodeRequester)) return@LaunchedEffect
+                withFrameNanos { }
+            }
         }
+
+        if (detailHasFocus) return@LaunchedEffect
+        if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
+            listState.scrollToItem(0)
+        }
+        repeat(8) {
+            if (detailHasFocus || tryFocus(playRequester)) return@LaunchedEffect
+            withFrameNanos { }
+        }
+        if (!detailHasFocus) tryFocus(listRequester)
     }
 
     BoxWithConstraints(
@@ -307,7 +301,7 @@ internal fun TvDetailPresentation(
 
         CompositionLocalProvider(LocalBringIntoViewSpec provides detailBringIntoView) {
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().onFocusChanged { detailHasFocus = it.hasFocus }.focusGroup(),
             state = listState,
             contentPadding = PaddingValues(bottom = when {
                 hasRelated -> 24.dp
