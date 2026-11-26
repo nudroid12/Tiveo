@@ -6,16 +6,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 
 import androidx.compose.ui.window.DialogProperties
 
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntRect
-import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.LayoutDirection
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupPositionProvider
-import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.window.Dialog
 
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 
 import com.vueo.shared.core.storage.RecentSearchStore
 
@@ -77,7 +71,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -124,7 +117,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
-private const val SEARCH_COLUMNS = 6
+internal const val TV_SEARCH_POSTER_COLUMNS = 7
 private val SEARCH_FOCUS_PAINT_INSET = 8.dp
 
 internal enum class TvSearchTypeFilter(val label: String) {
@@ -246,8 +239,8 @@ internal fun TvSearchScreen(
     val recentStore = remember(recentProfile, recentContext) { RecentSearchStore(recentContext, recentProfile) }
     var recentSearches by remember(recentStore) { mutableStateOf(recentStore.entries()) }
     var pendingRecent by remember(recentStore) { mutableStateOf<RecentSearch?>(null) }
-    var recentDialog by remember(recentStore) { mutableStateOf(false) }
-    var editRequest by remember(recentStore) { mutableIntStateOf(0) }
+    var recentExpanded by remember(recentStore) { mutableStateOf(false) }
+    val recentFirstRequester = remember { FocusRequester() }
     fun queueRecent(query: String, mode: TvSearchMode) {
         pendingRecent = RecentSearchPolicy.entry(query, RecentSearchMode.valueOf(mode.name))
     }
@@ -535,9 +528,12 @@ internal fun TvSearchScreen(
         }
     }
 
+    val keyboard = LocalSoftwareKeyboardController.current
+
     fun useRecent(entry: RecentSearch) {
         if (runtime.profileStore.activeProfileId() != recentProfile) return
-        recentDialog = false
+        recentExpanded = false
+        keyboard?.hide()
         pendingRecent = null
         recentSearches = recentStore.record(entry)
         session.mode = TvSearchMode.valueOf(entry.mode.name)
@@ -554,7 +550,7 @@ internal fun TvSearchScreen(
     }
 
     fun closeRecent() {
-        recentDialog = false
+        recentExpanded = false
         scope.launch {
             withFrameNanos { }
             if (active) runCatching { fieldRequester.requestFocus() }
@@ -623,13 +619,18 @@ internal fun TvSearchScreen(
         }
     }
 
-    BackHandler(enabled = active && !recentDialog && choiceDialog != null && actionMedia == null) { dismissChoiceDialog() }
-    BackHandler(enabled = active && !recentDialog && choiceDialog == null && actionMedia == null) {
+    BackHandler(enabled = active && choiceDialog != null && actionMedia == null) { dismissChoiceDialog() }
+    BackHandler(enabled = active && choiceDialog == null && actionMedia == null) {
         PerformanceDiagnostics.captureRuntimeEvent(
             "TV_TAB_BACK tab=Search action=${if (topBar.hasFocus) "home" else "open_navigation"}"
         )
         if (topBar.hasFocus) onBack() else focusTopBar()
     }
+
+    BackHandler(enabled = active && recentExpanded && session.query.isBlank() &&
+        recentSearches.isNotEmpty() && choiceDialog == null && actionMedia == null,
+        onBack = ::closeRecent,
+    )
 
     val contentStartPadding = MODERN_HOME_CONTENT_START_PADDING
 
@@ -643,18 +644,12 @@ internal fun TvSearchScreen(
                 modifier = Modifier.padding(horizontal = contentStartPadding),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Box(Modifier.fillMaxWidth()) {
+                Column(Modifier.fillMaxWidth()) {
                     TvMobileSearchField(
                         value = session.query,
                         mode = session.mode,
                         requester = fieldRequester,
-                        editRequest = editRequest,
-                        onOpenRecent = {
-                            if (session.query.isBlank() && recentSearches.isNotEmpty()) {
-                                recentDialog = true
-                                true
-                            } else false
-                        },
+                        onOpenRecent = { recentExpanded = session.query.isBlank() && recentSearches.isNotEmpty() },
                         modeRequester = modeRequester,
                         onFocused = {
                             if (!topBar.hasFocus) lastContentTarget = "field"
@@ -685,19 +680,23 @@ internal fun TvSearchScreen(
                         },
                         onRight = { runCatching { modeRequester.requestFocus() } },
                         onUp = ::focusTopBar,
-                        onDown = { runCatching { typeRequester.requestFocus() } },
+                        onDown = {
+                            val target = if (recentExpanded && session.query.isBlank() && recentSearches.isNotEmpty())
+                                recentFirstRequester else typeRequester
+                            runCatching { target.requestFocus() }
+                        },
                     )
-                    if (recentDialog && active && session.query.isBlank() && recentSearches.isNotEmpty()) {
-                        TvRecentSearchDialog(
+                    if (recentExpanded && active && session.query.isBlank() && recentSearches.isNotEmpty()) {
+                        TvRecentSearchList(
                             entries = recentSearches,
+                            firstRequester = recentFirstRequester,
+                            onUp = { fieldRequester.requestFocus() },
                             onSelect = ::useRecent,
                             onRemove = { entry ->
                                 recentSearches = recentStore.remove(entry)
                                 if (recentSearches.isEmpty()) closeRecent()
                             },
                             onClear = { recentSearches = recentStore.clear(); closeRecent() },
-                            onType = { recentDialog = false; editRequest += 1 },
-                            onDismiss = ::closeRecent,
                         )
                     }
                 }
@@ -903,7 +902,7 @@ internal fun TvSearchScreen(
                 filteredItems.isNotEmpty() -> {
                     TvPosterGridReveal {
                         LazyVerticalGrid(
-                            columns = GridCells.Fixed(SEARCH_COLUMNS),
+                            columns = GridCells.Fixed(TV_SEARCH_POSTER_COLUMNS),
                             state = gridState,
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(
@@ -939,16 +938,16 @@ internal fun TvSearchScreen(
                                         onOpenMedia(item)
                                     },
                                     onLongClick = { actionMedia = item },
-                                    onUpFromFirstRow = if (index < SEARCH_COLUMNS) {
+                                    onUpFromFirstRow = if (index < TV_SEARCH_POSTER_COLUMNS) {
                                         { runCatching { typeRequester.requestFocus() } }
                                     } else null,
-                                    onLeftFromFirstColumn = if (index % SEARCH_COLUMNS == 0) {
+                                    onLeftFromFirstColumn = if (index % TV_SEARCH_POSTER_COLUMNS == 0) {
                                         {
                                             focusTopBar()
                                         }
                                     } else null,
                                     blockRight =
-                                        index % SEARCH_COLUMNS == SEARCH_COLUMNS - 1 || index == filteredItems.lastIndex,
+                                        index % TV_SEARCH_POSTER_COLUMNS == TV_SEARCH_POSTER_COLUMNS - 1 || index == filteredItems.lastIndex,
                                 )
                             }
                         }
@@ -970,7 +969,7 @@ internal fun TvSearchScreen(
         TiveoPageContentFocus(
             topBar = topBar,
             tab = "Search",
-            active = active && !recentDialog && choiceDialog == null && actionMedia == null,
+            active = active && choiceDialog == null && actionMedia == null,
             onReturnToContent = {
                 initialContentFocusHandled = true
                 val requester = when {
@@ -1009,8 +1008,7 @@ private fun TvMobileSearchField(
     value: String,
     mode: TvSearchMode,
     requester: FocusRequester,
-    editRequest: Int,
-    onOpenRecent: () -> Boolean,
+    onOpenRecent: () -> Unit,
     modeRequester: FocusRequester,
     onFocused: () -> Unit,
     onModeFocused: () -> Unit,
@@ -1023,15 +1021,10 @@ private fun TvMobileSearchField(
 ) {
     var focused by remember { mutableStateOf(false) }
     val clearRequester = remember { FocusRequester() }
-    val editor = rememberTvOkToEdit(onActivate = onOpenRecent)
-    LaunchedEffect(editRequest) {
-        if (editRequest > 0) {
-            withFrameNanos { }
-            if (runCatching { requester.requestFocus() }.getOrDefault(false)) {
-                editor.startEditing()
-            }
-        }
-    }
+    val editor = rememberTvOkToEdit(onActivate = {
+        onOpenRecent()
+        false
+    })
     val shape = RoundedCornerShape(50.dp)
 
     Row(
@@ -1588,58 +1581,68 @@ private fun TvSearchClearButton(
     }
 }
 
-private object RecentSearchPopupPosition : PopupPositionProvider {
-    override fun calculatePosition(
-        anchorBounds: IntRect,
-        windowSize: IntSize,
-        layoutDirection: LayoutDirection,
-        popupContentSize: IntSize,
-    ): IntOffset = IntOffset(
-        anchorBounds.left.coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0)),
-        anchorBounds.bottom.coerceAtMost((windowSize.height - popupContentSize.height).coerceAtLeast(0)),
-    )
-}
-
 @Composable
-private fun TvRecentSearchDialog(
+private fun TvRecentSearchList(
     entries: List<RecentSearch>,
+    firstRequester: FocusRequester,
+    onUp: () -> Unit,
     onSelect: (RecentSearch) -> Unit,
     onRemove: (RecentSearch) -> Unit,
     onClear: () -> Unit,
-    onType: () -> Unit,
-    onDismiss: () -> Unit,
 ) {
-    Popup(
-        popupPositionProvider = RecentSearchPopupPosition,
-        onDismissRequest = onDismiss,
-        properties = PopupProperties(focusable = true),
+    Column(
+        Modifier.width(560.dp).heightIn(max = 186.dp)
+            .background(TvDesign.SurfaceRaised, RoundedCornerShape(12.dp)).padding(6.dp),
     ) {
-        val typeRequester = remember { FocusRequester() }
-        LaunchedEffect(entries) {
-            withFrameNanos { }
-            runCatching { typeRequester.requestFocus() }
-        }
-        Column(
-            Modifier.width(560.dp).heightIn(max = 360.dp)
-                .background(TvDesign.SurfaceRaised, RoundedCornerShape(18.dp)).padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            TvSearchChoiceRow("Type to search", false, typeRequester, onType)
-            LazyColumn(
-                modifier = Modifier.weight(1f, fill = false),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                lazyItems(entries, key = { it.key }) { entry ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.weight(1f)) {
-                            TvSearchChoiceRow(entry.label.take(80), false, remember { FocusRequester() }) { onSelect(entry) }
-                        }
-                        TvSearchClearButton("Remove ${entry.label}", remember { FocusRequester() }) { onRemove(entry) }
+        LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
+            lazyItems(entries, key = { it.key }) { entry ->
+                val first = entry.key == entries.first().key
+                val requester = if (first) firstRequester else remember(entry.key) { FocusRequester() }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.weight(1f)) {
+                        TvRecentSearchAction(entry.label, requester, onUp.takeIf { first }) { onSelect(entry) }
                     }
+                    TvSearchClearButton("Remove ${entry.label}", remember(entry.key) { FocusRequester() },
+                        onUp = onUp.takeIf { first }) { onRemove(entry) }
                 }
             }
-            TvSearchChoiceRow("Clear all", false, remember { FocusRequester() }, onClear)
         }
+        TvRecentSearchAction("Clear all", remember { FocusRequester() }, onClick = onClear)
+    }
+}
+
+@Composable
+private fun TvRecentSearchAction(
+    label: String,
+    requester: FocusRequester,
+    onUp: (() -> Unit)? = null,
+    onClick: () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    Box(
+        modifier = Modifier.fillMaxWidth().height(40.dp)
+            .focusRequester(requester)
+            .onFocusChanged { focused = it.isFocused }
+            .onPreviewKeyEvent { event ->
+                when {
+                    event.isTvActivationKey() -> {
+                        if (event.type == KeyEventType.KeyUp) onClick()
+                        true
+                    }
+                    onUp != null && event.type == KeyEventType.KeyDown &&
+                        event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_UP -> {
+                        onUp()
+                        true
+                    }
+                    else -> false
+                }
+            }
+            .background(if (focused) TvDesign.Accent.copy(alpha = .22f) else Color.Transparent, RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Text(label, color = TvDesign.White, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
