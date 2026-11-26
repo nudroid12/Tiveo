@@ -59,6 +59,7 @@ class TvHomeRetainedState internal constructor(runtime: TvRuntime) {
 
     // Lives above the route composition: Sources may dispose the Home UI.
     internal var routeFocusAnchor by mutableStateOf<HomeRouteFocusAnchor?>(null)
+    internal var catalogOnlyProfileId by mutableStateOf<String?>(null)
 
     internal var loadedRefreshToken = Int.MIN_VALUE
     internal var libraryHydrationRefreshToken = Int.MIN_VALUE
@@ -351,6 +352,16 @@ internal fun TvHomeScreen(
             } else row
         }
     }
+    val catalogRails = remember(railRows) {
+        railRows.filter { it.key.startsWith("catalog:") && it.entries.isNotEmpty() }
+    }
+    val catalogOnly = retainedState.catalogOnlyProfileId == activeProfileId && catalogRails.isNotEmpty()
+    val displayedRows = if (catalogOnly) catalogRails else railRows
+    fun toggleCatalogOnly() {
+        if (catalogRails.isNotEmpty()) {
+            retainedState.catalogOnlyProfileId = if (catalogOnly) null else activeProfileId
+        }
+    }
     var seeAllKey by remember(activeProfileId) { mutableStateOf<String?>(null) }
     val seeAllRow = rows.firstOrNull { it.key == seeAllKey }
     val visibleContinueWatchingCount =
@@ -423,12 +434,16 @@ internal fun TvHomeScreen(
     )
 
     BackHandler(enabled = active && seeAllRow == null) {
-        if (topBar.hasFocus) onBack() else focusTopBar()
+        if (catalogOnly) toggleCatalogOnly()
+        else if (topBar.hasFocus) onBack() else focusTopBar()
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
         TvHomePresentation(
-            rows = railRows,
+            rows = displayedRows,
+            catalogOnly = catalogOnly,
+            canToggleCatalogOnly = catalogRails.isNotEmpty(),
+            onToggleCatalogOnly = ::toggleCatalogOnly,
             artworkApiKey = runtime.pluginStore.tmdbApiKey(),
             loading = loading,
             error = error,
