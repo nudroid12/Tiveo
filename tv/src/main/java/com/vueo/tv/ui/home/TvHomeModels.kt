@@ -30,6 +30,11 @@ internal sealed interface TvHomeEntry {
         val newEpisodeLabel: String? = null,
     ) : TvHomeEntry
 
+    data class SeeAll(val rowKey: String, val title: String) : TvHomeEntry {
+        override val key = "see-all:$rowKey"
+        override val media = MediaItem(key, "see-all", title)
+    }
+
     data class Folder(
         val collectionId: String,
         val folder: com.vueo.shared.core.collections.CollectionFolder,
@@ -101,6 +106,7 @@ internal fun TvHomeEntry.open(
     onFolder: (String, String) -> Unit,
 ) {
     when (this) {
+        is TvHomeEntry.SeeAll -> Unit
         is TvHomeEntry.Folder -> onFolder(collectionId, folder.id)
         is TvHomeEntry.Media -> onOpenMedia(media)
         is TvHomeEntry.Resume -> onResume(playback)

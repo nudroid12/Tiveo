@@ -19,6 +19,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -78,6 +79,7 @@ internal fun TvContentSettingsRow(
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun TvInlineAddonRow(
     entry: TvSettingsEntry,
@@ -93,6 +95,8 @@ private fun TvInlineAddonRow(
 
     Row(
         modifier = Modifier.fillMaxWidth()
+            .focusProperties { onEnter = { requester.requestFocus() } }
+            .focusGroup()
             .background(TvDesign.Surface, shape)
             .border(1.dp, TvDesign.White.copy(alpha = .14f), shape)
             .padding(horizontal = 16.dp, vertical = 8.dp),
@@ -213,6 +217,7 @@ private fun TvInlineAddonControl(
 private fun activation(key: Int): Boolean = key == KeyEvent.KEYCODE_DPAD_CENTER ||
     key == KeyEvent.KEYCODE_ENTER || key == KeyEvent.KEYCODE_NUMPAD_ENTER
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun TvPluginRepositoryCard(
     entry: TvSettingsEntry,
@@ -230,7 +235,9 @@ private fun TvPluginRepositoryCard(
     val shape = RoundedCornerShape(15.dp)
     Column(modifier = Modifier.padding(bottom = if (nextProvider != null) 12.dp else 0.dp)
         .fillMaxWidth().background(TvDesign.Surface, shape)
-        .onFocusChanged { cardFocused = it.hasFocus }.focusGroup()) {
+        .onFocusChanged { cardFocused = it.hasFocus }
+        .focusProperties { onEnter = { requesterFor(entry.id).requestFocus() } }
+        .focusGroup()) {
         Row(
             modifier = Modifier.fillMaxWidth()
                 .padding(horizontal = 14.dp, vertical = 10.dp),
