@@ -296,6 +296,13 @@ private fun HomeContinueWatchingCard(
 ) {
     val remainingLabel = homeRemainingTimeLabel(entry)
     val episodeLabel = homeEpisodeLabel(entry)
+    val episodeTitle = entry.episodeTitle?.trim()?.takeIf { title ->
+        title.isNotEmpty() && (episodeLabel == null || !Regex(
+            """S0*${entry.season}\s*E0*${entry.episode}""",
+            RegexOption.IGNORE_CASE,
+        ).matches(title))
+    }
+    val episodeDetails = listOfNotNull(episodeLabel, episodeTitle).joinToString(" • ")
 
     Surface(
         modifier = Modifier
@@ -331,17 +338,9 @@ private fun HomeContinueWatchingCard(
                     ),
             )
 
-            if (episodeLabel != null || remainingLabel != null) {
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .fillMaxWidth()
-                        .padding(8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    episodeLabel?.let { ContinueWatchingBadge(it) }
-                    Spacer(Modifier.weight(1f))
-                    remainingLabel?.let { ContinueWatchingBadge(it) }
+            remainingLabel?.let {
+                Box(Modifier.align(Alignment.TopEnd).padding(8.dp)) {
+                    ContinueWatchingBadge(it)
                 }
             }
 
@@ -362,9 +361,9 @@ private fun HomeContinueWatchingCard(
                         overflow = TextOverflow.Ellipsis,
                     )
 
-                    entry.episodeTitle?.takeIf { it.isNotBlank() }?.let { episodeTitle ->
+                    if (episodeDetails.isNotEmpty()) {
                         Text(
-                            text = episodeTitle,
+                            text = episodeDetails,
                             color = Color.White.copy(alpha = .78f),
                             fontSize = 10.sp,
                             lineHeight = 12.sp,
