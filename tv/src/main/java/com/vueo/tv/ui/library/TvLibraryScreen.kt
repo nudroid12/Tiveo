@@ -415,8 +415,17 @@ internal fun TvLibraryScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                listOf("Saved", "History").forEachIndexed { index, label ->
+                            Text(
+                                text = "Library",
+                                color = TvDesign.White,
+                                fontSize = 30.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                listOf("Watchlist", "History").forEachIndexed { index, label ->
                                     val selected = historySelected == (index == 1)
                                     LibraryViewModeButton(
                                         gridView = gridView,
@@ -450,28 +459,28 @@ internal fun TvLibraryScreen(
                                         onDown = { requestFilterFocus(); true },
                                     )
                                 }
+                                LibraryViewModeButton(
+                                    gridView = gridView,
+                                    requester = viewModeRequester,
+                                    onFocused = {
+                                        if (!topBar.hasFocus) rememberTarget("view")
+                                    },
+                                    onToggle = {
+                                        val nextGridView = !gridView
+                                        gridView = nextGridView
+                                        libraryUiPreferences
+                                            .edit()
+                                            .putBoolean(LIBRARY_GRID_VIEW_KEY, nextGridView)
+                                            .apply()
+                                        rememberTarget("view")
+                                    },
+                                    onLeft = {
+                                        (if (historySelected) historyRequester else favoritesRequester).requestFocus()
+                                        true
+                                    },
+                                    onDown = { requestFilterFocus(); true },
+                                )
                             }
-                            LibraryViewModeButton(
-                                gridView = gridView,
-                                requester = viewModeRequester,
-                                onFocused = {
-                                    if (!topBar.hasFocus) rememberTarget("view")
-                                },
-                                onToggle = {
-                                    val nextGridView = !gridView
-                                    gridView = nextGridView
-                                    libraryUiPreferences
-                                        .edit()
-                                        .putBoolean(LIBRARY_GRID_VIEW_KEY, nextGridView)
-                                        .apply()
-                                    rememberTarget("view")
-                                },
-                                onLeft = {
-                                    (if (historySelected) historyRequester else favoritesRequester).requestFocus()
-                                    true
-                                },
-                                onDown = { requestFilterFocus(); true },
-                            )
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                             LibraryViewModeButton(
