@@ -321,7 +321,7 @@ internal fun TvHomePresentation(
                         } else {
                             firstLeftPress = now
                         }
-                    }) else {},
+                    }) else ({}),
                     onFocused = { row, index, entry ->
                         if (focusedEntry?.key != entry.key || lastFocusedRowKey != row.key) firstLeftPress = 0L
                         TvHomeFocusMemory.activeRowKey = row.key

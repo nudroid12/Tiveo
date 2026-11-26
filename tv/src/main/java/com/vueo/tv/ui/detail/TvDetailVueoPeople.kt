@@ -20,8 +20,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.relocation.BringIntoViewResponder
 import androidx.compose.foundation.relocation.bringIntoViewResponder
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInParent
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
@@ -52,6 +50,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -85,7 +84,9 @@ import com.vueo.tv.ui.motion.TvMotion
 
 private enum class VueoPeopleTab { CAST, RELATED, TRAILER }
 
-private val VueoCastCircle = 100.dp
+private val VueoCastPortraitWidth = 100.dp
+private val VueoCastPortraitHeight = 125.dp
+private val VueoCastPortraitShape = RoundedCornerShape(12.dp)
 private val VueoCastItemWidth = 150.dp
 private val VueoRelatedWidth = 260.dp
 private val VueoRelatedHeight = 146.dp
@@ -287,6 +288,9 @@ private fun VueoCastRow(
     upRequester: FocusRequester,
     downRequester: FocusRequester?,
     listState: LazyListState = rememberLazyListState(),
+    lastCardRequester: FocusRequester? = null,
+    lastCardKey: String? = null,
+    onCardFocused: (String) -> Unit = {},
     onOpen: (MediaPerson) -> Unit,
 ) {
     val visible = remember(cast) { cast.take(20) }
@@ -304,8 +308,13 @@ private fun VueoCastRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         itemsIndexed(visible, key = { index, person -> "$index:${person.name}:${person.character.orEmpty()}" }) { index, person ->
+            val cardKey = "$index:${person.name}:${person.character.orEmpty()}"
             VueoCastMember(
                 person = person,
+                modifier = if (lastCardKey == cardKey && lastCardRequester != null) {
+                    Modifier.focusRequester(lastCardRequester)
+                } else Modifier,
+                onFocused = { onCardFocused(cardKey) },
                 requester = requesters.getValue(index),
                 upRequester = upRequester,
                 downRequester = downRequester,
@@ -318,6 +327,8 @@ private fun VueoCastRow(
 @Composable
 private fun VueoCastMember(
     person: MediaPerson,
+    modifier: Modifier,
+    onFocused: () -> Unit,
     requester: FocusRequester,
     upRequester: FocusRequester,
     downRequester: FocusRequester?,
@@ -327,22 +338,26 @@ private fun VueoCastMember(
     val role = person.character?.takeIf(String::isNotBlank)
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .width(VueoCastItemWidth)
             .focusRequester(requester)
             .focusProperties {
                 up = upRequester
                 downRequester?.let { down = it }
             }
-            .onFocusChanged { focused = it.isFocused }
+            .onFocusChanged {
+                focused = it.isFocused
+                if (it.isFocused) onFocused()
+            }
             .clickable(onClick = onOpen)
             .focusable(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(
             modifier = Modifier
-                .size(VueoCastCircle)
-                .clip(CircleShape)
+                .width(VueoCastPortraitWidth)
+                .height(VueoCastPortraitHeight)
+                .clip(VueoCastPortraitShape)
                 .background(
                     if (focused) TvDesign.Accent.copy(alpha = .13f)
                     else TvDesign.SurfaceRaised,
@@ -350,7 +365,7 @@ private fun VueoCastMember(
                 .border(
                     width = if (focused) 2.dp else 0.dp,
                     color = if (focused) TvDesign.Focus else Color.Transparent,
-                    shape = CircleShape,
+                    shape = VueoCastPortraitShape,
                 ),
             contentAlignment = Alignment.Center,
         ) {
@@ -761,11 +776,11 @@ internal fun VueoDetailCastCompanyTabs(
     production: List<MediaCompany>,
     networks: List<MediaCompany>,
     sectionRequester: FocusRequester,
+    lastCardRequester: FocusRequester,
     upRequester: FocusRequester,
     downRequester: FocusRequester?,
     onMoveUp: () -> Unit,
     onMoveDown: (() -> Unit)?,
-    onCenterContent: (Float, Float) -> Unit,
     onOpenCast: (MediaPerson) -> Unit,
     onOpenCompany: (MediaCompany, Boolean) -> Unit,
 ) {
@@ -775,7 +790,8 @@ internal fun VueoDetailCastCompanyTabs(
         if (networks.isNotEmpty()) add(VueoCompanyTab.NETWORK)
     }
     if (available.isEmpty()) return
-    var selected by remember(mediaKey) { mutableStateOf(available.first()) }
+    var selected by rememberSaveable(mediaKey) { mutableStateOf(available.first()) }
+    var lastCardKey by rememberSaveable(mediaKey) { mutableStateOf<String?>(null) }
     val active = selected.takeIf { it in available } ?: available.first()
     val tabRequesters = remember(mediaKey, available, sectionRequester) {
         available.associateWith { if (it == available.first()) sectionRequester else FocusRequester() }
@@ -789,22 +805,15 @@ internal fun VueoDetailCastCompanyTabs(
     val networkListState = rememberLazyListState()
     val focusScope = rememberCoroutineScope()
     var enterContentJob by remember(mediaKey) { mutableStateOf<Job?>(null) }
-    var sectionFocused by remember(mediaKey) { mutableStateOf(false) }
-    var contentTop by remember(mediaKey) { mutableStateOf(0f) }
-    var contentHeight by remember(mediaKey) { mutableStateOf(0f) }
     val relocationBoundary = remember(mediaKey) {
         object : BringIntoViewResponder {
             override fun calculateRectForParent(localRect: Rect): Rect = Rect.Zero
             override suspend fun bringChildIntoView(localRect: () -> Rect?) { }
         }
     }
-    LaunchedEffect(sectionFocused, contentTop, contentHeight) {
-        if (sectionFocused && contentHeight > 0f) onCenterContent(contentTop, contentHeight)
-    }
     Column(
         modifier = Modifier.fillMaxWidth()
             .bringIntoViewResponder(relocationBoundary)
-            .onFocusChanged { sectionFocused = it.hasFocus }
             .focusGroup()
             .padding(top = 14.dp, bottom = 4.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -883,11 +892,8 @@ TvTabMarkerHost {
 }
         // The same height prevents the page from moving when Cast changes to a shorter logo row.
         Box(
-            modifier = Modifier.fillMaxWidth().height(185.dp)
-                .onGloballyPositioned { coordinates ->
-                    contentTop = coordinates.positionInParent().y
-                    contentHeight = coordinates.size.height.toFloat()
-                }.onPreviewKeyEvent { event ->
+            modifier = Modifier.fillMaxWidth().height(205.dp)
+                .onPreviewKeyEvent { event ->
                 if (event.key != Key.DirectionDown || onMoveDown == null) false
                 else {
                     if (event.type == KeyEventType.KeyDown) onMoveDown()
@@ -903,6 +909,9 @@ TvTabMarkerHost {
                     upRequester = tabRequesters.getValue(active),
                     downRequester = downRequester,
                     listState = castListState,
+                    lastCardRequester = lastCardRequester,
+                    lastCardKey = lastCardKey,
+                    onCardFocused = { lastCardKey = it },
                     onOpen = onOpenCast,
                 )
                 VueoCompanyTab.PRODUCTION, VueoCompanyTab.NETWORK -> {
@@ -918,10 +927,16 @@ TvTabMarkerHost {
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         itemsIndexed(companies.take(14), key = { index, company -> "$active:$index:${company.name}" }) { index, company ->
+                            val cardKey = "$active:$index:${company.name}"
+                            val returnFocus = if (lastCardKey == cardKey) {
+                                Modifier.focusRequester(lastCardRequester)
+                            } else Modifier
                             VueoCompanyCard(
                                 company = company,
                                 onOpen = { onOpenCompany(company, active == VueoCompanyTab.NETWORK) },
-                                modifier = Modifier.focusRequester(requesters[index]).focusProperties {
+                                modifier = returnFocus.focusRequester(requesters[index]).onFocusChanged {
+                                    if (it.isFocused) lastCardKey = cardKey
+                                }.focusProperties {
                                     up = tabRequesters.getValue(active)
                                     down = downRequester ?: FocusRequester.Cancel
                                 },

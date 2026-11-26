@@ -3,7 +3,6 @@ package com.vueo.tv.detail
 import com.vueo.tv.ui.motion.*
 import androidx.compose.animation.core.animateFloatAsState
 import android.os.SystemClock
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -12,7 +11,6 @@ import androidx.compose.foundation.relocation.bringIntoViewResponder
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.gestures.BringIntoViewSpec
-import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.layout.Arrangement
@@ -20,6 +18,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -101,6 +100,7 @@ internal fun TvDetailPresentation(
     val seasonRequester = remember(mediaKey) { FocusRequester() }
     val episodeRequester = remember(mediaKey) { FocusRequester() }
     val peopleContentRequester = remember(mediaKey) { FocusRequester() }
+    val lastPeopleCardRequester = remember(mediaKey) { FocusRequester() }
     val relatedContentRequester = remember(mediaKey) { FocusRequester() }
 
     val people = remember(state.item) {
@@ -145,20 +145,23 @@ internal fun TvDetailPresentation(
     }
 
     fun revealAndFocus(index: Int, target: FocusRequester, forceReveal: Boolean = false) {
-        // Related cards sit in a relocation boundary. Requesting an attached node
-        // can succeed without bringing its vertical section onto the screen.
-        // Reveal explicitly both entering and leaving that rail.
-        val crossesRelated = forceReveal || target == relatedContentRequester
+        // Cast and recommendations own their horizontal relocation. Place their
+        // whole section before moving focus so the tabs and headings stay visible.
+        val enteringPeople = target == peopleContentRequester
+        val topAligned = enteringPeople || target == relatedContentRequester
+        val explicitReveal = forceReveal || topAligned
         val generation = ++navigationGeneration
         navigationJob?.cancel()
         movingBetweenSections = false
-        if (!crossesRelated && index != 0 && runCatching { target.requestFocus() }.getOrDefault(false)) return
+        if (!explicitReveal && index != 0 && runCatching { target.requestFocus() }.getOrDefault(false)) return
         movingBetweenSections = true
         navigationJob = navigationScope.launch {
             try {
                 val viewport = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
                 val visibleItem = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
-                if (visibleItem != null) {
+                if (topAligned) {
+                    listState.scrollToItem(index)
+                } else if (visibleItem != null) {
                     val destinationOffset = if (index == 0) 0 else
                         (viewport * .42f - visibleItem.size / 2f).toInt()
                     // Place the row before focusing it, without waiting for a scroll animation.
@@ -166,8 +169,9 @@ internal fun TvDetailPresentation(
                 } else {
                     listState.scrollToItem(index, if (index == 0) 0 else -viewport / 2)
                 }
-                val focused = requestSectionFocus(target)
-                if (!focused && crossesRelated && navigationGeneration == generation) {
+                val restored = enteringPeople && forceReveal && requestSectionFocus(lastPeopleCardRequester, 3)
+                val focused = restored || requestSectionFocus(target)
+                if (!focused && explicitReveal && navigationGeneration == generation) {
                     // Metadata may have shifted the section while the row was
                     // being revealed. Retry after an explicit lazy-list placement.
                     listState.scrollToItem(index)
@@ -292,7 +296,8 @@ internal fun TvDetailPresentation(
             .fillMaxSize()
             .background(TvDesign.Black),
     ) {
-        val heroHeight = if (firstBelowHero == null) maxHeight else maxHeight - 36.dp
+        val heroHeight = maxHeight
+        val alignedSectionMinHeight = (maxHeight - 24.dp).coerceAtLeast(0.dp)
         VueoDetailBackdrop(
             item = state.item,
             imageAlpha = backdropAlpha,
@@ -304,8 +309,7 @@ internal fun TvDetailPresentation(
             modifier = Modifier.fillMaxSize().onFocusChanged { detailHasFocus = it.hasFocus }.focusGroup(),
             state = listState,
             contentPadding = PaddingValues(bottom = when {
-                hasRelated -> 24.dp
-                hasPeopleTabs -> maxOf(88.dp, maxHeight / 2 - 96.dp)
+                hasRelated || hasPeopleTabs -> 24.dp
                 else -> 88.dp
             }),
             verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -378,48 +382,32 @@ internal fun TvDetailPresentation(
                         hasSeasons -> 1
                         else -> 0
                     }
-                    VueoDetailCastCompanyTabs(
-                        mediaKey = mediaKey,
-                        cast = people,
-                        production = state.item.productionCompanies,
-                        networks = state.item.networks,
-                        sectionRequester = peopleContentRequester,
-                        upRequester = peopleUp,
-                        downRequester = if (hasRelated) relatedContentRequester else null,
-                        onCenterContent = { contentTop, contentHeight ->
-                            val generation = ++navigationGeneration
-                            navigationJob?.cancel()
-                            movingBetweenSections = true
-                            navigationJob = navigationScope.launch {
-                                try {
-                                    val layout = listState.layoutInfo
-                                    val section = layout.visibleItemsInfo.firstOrNull { it.index == peopleIndex }
-                                    if (section != null) {
-                                        val viewportCenter = (layout.viewportStartOffset + layout.viewportEndOffset) / 2f
-                                        val distance = section.offset + contentTop + contentHeight / 2f - viewportCenter
-                                        if (kotlin.math.abs(distance) > 1f) {
-                                            listState.animateScrollBy(distance,
-                                                animationSpec = spring(dampingRatio = .95f, stiffness = 180f))
-                                        }
-                                    }
-                                } finally {
-                                    if (navigationGeneration == generation) movingBetweenSections = false
-                                }
-                            }
-                        },
-                        onMoveUp = { revealAndFocus(upIndex, peopleUp) },
-                        onMoveDown = if (hasRelated) ({ revealAndFocus(relatedIndex, relatedContentRequester) }) else null,
-                        onOpenCast = { person ->
-                            onOpenEntity(MediaEntityTarget(kind = MediaEntityKind.ACTOR, name = person.name))
-                        },
-                        onOpenCompany = { company, isNetwork ->
-                            onOpenEntity(MediaEntityTarget(
-                                kind = if (isNetwork) MediaEntityKind.NETWORK else MediaEntityKind.COMPANY,
-                                name = company.name,
-                                tmdbId = company.tmdbId,
-                            ))
-                        },
-                    )
+                    Box(
+                        if (hasRelated) Modifier else Modifier.heightIn(min = alignedSectionMinHeight),
+                    ) {
+                        VueoDetailCastCompanyTabs(
+                            mediaKey = mediaKey,
+                            cast = people,
+                            production = state.item.productionCompanies,
+                            networks = state.item.networks,
+                            sectionRequester = peopleContentRequester,
+                            lastCardRequester = lastPeopleCardRequester,
+                            upRequester = peopleUp,
+                            downRequester = if (hasRelated) relatedContentRequester else null,
+                            onMoveUp = { revealAndFocus(upIndex, peopleUp) },
+                            onMoveDown = if (hasRelated) ({ revealAndFocus(relatedIndex, relatedContentRequester) }) else null,
+                            onOpenCast = { person ->
+                                onOpenEntity(MediaEntityTarget(kind = MediaEntityKind.ACTOR, name = person.name))
+                            },
+                            onOpenCompany = { company, isNetwork ->
+                                onOpenEntity(MediaEntityTarget(
+                                    kind = if (isNetwork) MediaEntityKind.NETWORK else MediaEntityKind.COMPANY,
+                                    name = company.name,
+                                    tmdbId = company.tmdbId,
+                                ))
+                            },
+                        )
+                    }
                 }
             }
 
@@ -431,15 +419,18 @@ internal fun TvDetailPresentation(
                         hasSeasons -> 1
                         else -> 0
                     }
-                    Box(sectionNavigation(relatedUpIndex to relatedUpRequester, null, relatedBoundary = true)
-                        .bringIntoViewResponder(episodeRowResponder)) {
-                    VueoDetailRelatedSection(
-                        items = state.related,
-                        sectionRequester = relatedContentRequester,
-                        upRequester = relatedUpRequester,
-                        usesTmdb = state.tmdbMoreLikeThisEnabled,
-                        onOpen = onOpenRelated,
-                    )
+                    Box(
+                        Modifier.heightIn(min = alignedSectionMinHeight)
+                            .then(sectionNavigation(relatedUpIndex to relatedUpRequester, null, relatedBoundary = true))
+                            .bringIntoViewResponder(episodeRowResponder),
+                    ) {
+                        VueoDetailRelatedSection(
+                            items = state.related,
+                            sectionRequester = relatedContentRequester,
+                            upRequester = relatedUpRequester,
+                            usesTmdb = state.tmdbMoreLikeThisEnabled,
+                            onOpen = onOpenRelated,
+                        )
                     }
                 }
             }
