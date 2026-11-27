@@ -41,6 +41,7 @@ import com.vueo.tv.core.TvTitleArtwork
 @Composable
 internal fun TvHomePresentation(
     rows: List<TvHomeRow>,
+    onCatalogViewportChanged: (List<String>) -> Unit,
     onCatalogRowFocused: (String) -> Unit,
     onCatalogPageNeeded: (TvHomeRow, Int) -> Boolean,
     catalogOnly: Boolean,
@@ -316,6 +317,7 @@ internal fun TvHomePresentation(
                             firstLeftPress = now
                         }
                     }) else ({}),
+                    onCatalogViewportChanged = onCatalogViewportChanged,
                     onCatalogPageNeeded = onCatalogPageNeeded,
                     onFocused = { row, index, entry ->
                         onCatalogRowFocused(row.key)
