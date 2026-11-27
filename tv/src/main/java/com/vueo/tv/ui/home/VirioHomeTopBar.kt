@@ -181,6 +181,7 @@ internal fun TiveoTopBar(
             )
             topBarTabs.forEachIndexed { index, tab ->
                 val isSelected = tab == selected
+                val isFocused = canFocus && groupHasFocus && state.focusedTab == tab
                 Column(
                     modifier = Modifier
                         .focusRequester(state.requesterFor(tab))
@@ -198,7 +199,7 @@ internal fun TiveoTopBar(
                                     if (canFocus && !state.settingsPanelTransition && event.type == KeyEventType.KeyDown) {
                                         val step = if (event.key == Key.DirectionLeft) -1 else 1
                                         val destination = topBarTabs.getOrNull(index + step)
-                                        if (destination != null && state.focus(destination)) onNavigate(destination)
+                                        if (destination != null) state.focus(destination)
                                     }
                                     true
                                 }
@@ -226,9 +227,9 @@ internal fun TiveoTopBar(
                 ) {
                     Text(
                         text = if (tab == "Library") "My List" else tab,
-                        color = if (isSelected) TvDesign.Accent else Color.White.copy(alpha = .76f),
+                        color = if (isFocused) Color.White else Color.White.copy(alpha = .76f),
                         fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        fontWeight = if (isFocused) FontWeight.SemiBold else FontWeight.Medium,
                         maxLines = 1,
                         softWrap = false,
                     )
@@ -246,8 +247,7 @@ internal fun TiveoTopBar(
                 label = "tabUnderlineCenter",
             )
             val width by animateFloatAsState(
-                targetValue = (selectedBounds.width - with(LocalDensity.current) { 20.dp.toPx() }).coerceAtLeast(0f) *
-                    if (barHasFocus) 1f else .38f,
+                targetValue = (selectedBounds.width - with(LocalDensity.current) { 20.dp.toPx() }).coerceAtLeast(0f) * .60f,
                 animationSpec = tween(durationMillis = 210),
                 label = "tabUnderlineWidth",
             )

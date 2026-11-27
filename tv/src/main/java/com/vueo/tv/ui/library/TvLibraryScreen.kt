@@ -375,11 +375,6 @@ internal fun TvLibraryScreen(
                                         selected = selected,
                                         requester = if (index == 0) favoritesRequester else historyRequester,
                                         onFocused = {
-                                            if (!selected && historyDeleteIndex == null) {
-                                                historySelected = index == 1
-                                                TvLibraryFocusMemory.firstVisibleItemIndex = 0
-                                                TvLibraryFocusMemory.firstVisibleItemScrollOffset = 0
-                                            }
                                             if (!topBar.hasFocus) rememberTarget("section")
                                         },
                                         onToggle = {
@@ -629,8 +624,12 @@ private fun LibraryViewModeButton(
                 shape = ControlShape,
             )
             .border(
-                width = if (focused) 1.dp else 0.dp,
-                color = if (focused) TvDesign.Accent.copy(alpha = .42f) else Color.Transparent,
+                width = if (focused) 2.dp else 0.dp,
+                color = when {
+                    !focused -> Color.Transparent
+                    selected -> TvDesign.OnAccent
+                    else -> TvDesign.Focus
+                },
                 shape = ControlShape,
             )
             .clickable(onClick = onToggle)
