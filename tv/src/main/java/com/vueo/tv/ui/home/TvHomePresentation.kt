@@ -318,7 +318,6 @@ internal fun TvHomePresentation(
                     }) else ({}),
                     onCatalogPageNeeded = onCatalogPageNeeded,
                     onFocused = { row, index, entry ->
-                        onCatalogPageNeeded(row, index)
                         onCatalogRowFocused(row.key)
                         if (focusedEntry?.key != entry.key || lastFocusedRowKey != row.key) firstLeftPress = 0L
                         TvHomeFocusMemory.activeRowKey = row.key
