@@ -1650,7 +1650,9 @@ fun VueoTvApp(
                 }
             }
 
-            displayedRootRoute.topBarTab?.let { selected ->
+            val hideCatalogTopBar = displayedRootRoute == TvRoute.HOME &&
+                homeRetainedState.catalogOnlyProfileId == runtime.profileStore.activeProfileId()
+            displayedRootRoute.topBarTab?.takeUnless { hideCatalogTopBar }?.let { selected ->
                 TiveoTopBar(
                     state = topBar,
                     selected = selected,

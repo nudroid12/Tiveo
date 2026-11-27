@@ -414,13 +414,14 @@ internal fun TvHomeScreen(
     val routeReturnPending = retainedState.routeFocusAnchor != null
 
     fun focusTopBar() {
-        if (!routeReturnPending && actionEntry == null) topBar.focus("Home")
+        if (catalogOnly) toggleCatalogOnly()
+        else if (!routeReturnPending && actionEntry == null) topBar.focus("Home")
     }
 
     TiveoPageContentFocus(
         topBar = topBar,
         tab = "Home",
-        active = active && !routeReturnPending && actionEntry == null,
+        active = active && !catalogOnly && !routeReturnPending && actionEntry == null,
         onReturnToContent = {
             if (rows.isNotEmpty()) {
                 contentReturnToken += 1
@@ -468,8 +469,8 @@ internal fun TvHomeScreen(
                 retainedState.routeFocusAnchor = it
             },
             onRouteFocusRestored = { retainedState.routeFocusAnchor = null },
-            navigationVisible = active && topBar.hasFocus,
-            navigationOwnsFocus = active && topBar.hasFocus,
+            navigationVisible = active && !catalogOnly && topBar.hasFocus,
+            navigationOwnsFocus = active && !catalogOnly && topBar.hasFocus,
             contentFocusRequester = contentFocusRequester,
             focusResetToken = homeFocusResetToken,
             contentReturnToken = contentReturnToken,

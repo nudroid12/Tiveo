@@ -49,9 +49,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -145,7 +142,6 @@ internal fun TvModernHomeRows(
     rows: List<TvHomeRow>,
     rowsViewportHeight: Dp,
     catalogOnly: Boolean,
-    onCatalogCardPosition: ((String, String, Offset) -> Unit)?,
     contentFocusRequester: FocusRequester,
     focusResetToken: Int,
     contentReturnToken: Int,
@@ -305,7 +301,7 @@ internal fun TvModernHomeRows(
         val layout = verticalState.layoutInfo
         if (layout.visibleItemsInfo.none { it.key == row.key }) {
             val viewportHeight = layout.viewportEndOffset - layout.viewportStartOffset
-            val rowHeight = with(density) { row.kind.homeRowContentHeight(this).roundToPx() }
+            val rowHeight = with(density) { TvHomeRowKind.POSTERS.homeRowContentHeight(this).roundToPx() }
             val offset = if (movingDown) (viewportHeight - rowHeight).coerceAtLeast(0) else 0
             verticalState.animateScrollToItem(index, -offset)
         }
@@ -660,9 +656,6 @@ internal fun TvModernHomeRows(
                 }
                 TvModernHomeRow(
                     rowVisible = rowVisible,
-                    onCatalogCardPosition = onCatalogCardPosition?.let { report ->
-                        { key, position -> report(row.key, key, position) }
-                    },
                     catalogOnly = catalogOnly,
                     row = row,
                     rowState = rowState,
@@ -741,7 +734,6 @@ internal fun TvModernHomeRows(
 private fun TvModernHomeRow(
     row: TvHomeRow,
     rowVisible: Boolean,
-    onCatalogCardPosition: ((String, Offset) -> Unit)?,
     catalogOnly: Boolean,
     rowState: LazyListState,
     rowFocusRequester: FocusRequester,
@@ -781,8 +773,8 @@ private fun TvModernHomeRow(
     val density = LocalDensity.current
     val defaultBringIntoViewSpec = LocalBringIntoViewSpec.current
     val rowHorizontalPadding = MODERN_HOME_CONTENT_START_PADDING
-    val cardWidth = row.kind.cardWidth
-    val cardHeight = row.kind.cardHeight
+    val cardWidth = if (catalogOnly) PosterWidth else row.kind.cardWidth
+    val cardHeight = if (catalogOnly) MODERN_HOME_POSTER_HEIGHT else row.kind.cardHeight
     val focusScale = row.kind.cardFocusScale()
     val focusPaintInset = row.kind.focusPaintInset(focusScale)
 
@@ -1036,9 +1028,7 @@ private fun TvModernHomeRow(
                         if (rowVisible && cardVisible) imageActivated[0] = true
                         TvModernHomeCard(
                             loadImage = imageActivated[0],
-                            onCatalogPosition = onCatalogCardPosition.takeIf {
-                                row.kind == TvHomeRowKind.POSTERS && entry is TvHomeEntry.Media
-                            },
+                            catalogOnly = catalogOnly,
                             entry = entry,
                             kind = row.kind,
                             width = cardWidth,
@@ -1082,7 +1072,7 @@ private fun TvModernHomeRow(
 private fun TvModernHomeCard(
     entry: TvHomeEntry,
     loadImage: Boolean,
-    onCatalogPosition: ((String, Offset) -> Unit)?,
+    catalogOnly: Boolean,
     kind: TvHomeRowKind,
     width: Dp,
     height: Dp,
@@ -1104,26 +1094,17 @@ private fun TvModernHomeCard(
         label = "modernHomeCardScale",
     )
 
-    var position by remember(entry.key, onCatalogPosition != null) { mutableStateOf<Offset?>(null) }
-    val reportPosition by rememberUpdatedState(onCatalogPosition)
-    LaunchedEffect(focused, position, onCatalogPosition != null) {
-        if (focused) position?.let { reportPosition?.invoke(entry.key, it) }
-    }
-    val positionTracking = if (onCatalogPosition != null) {
-        Modifier.onGloballyPositioned { position = it.positionInRoot() }
-    } else Modifier
-
     val shape = if (kind == TvHomeRowKind.CONTINUE_WATCHING || kind == TvHomeRowKind.COLLECTIONS) ContinueShape else PosterShape
 
     Box(
         modifier = Modifier
             .width(width)
             .height(height)
-            .then(positionTracking)
             .zIndex(if (focused) 1f else 0f)
             .graphicsLayer {
                 scaleX = animatedScale
                 scaleY = animatedScale
+                alpha = if (catalogOnly && !focused) .78f else 1f
             }
             .focusRequester(requester)
             .focusProperties { canFocus = contentFocusEnabled }
@@ -1146,8 +1127,8 @@ private fun TvModernHomeCard(
             .clip(shape)
             .background(TvDesign.Surface)
             .border(
-                width = if (focused) 2.dp else 0.dp,
-                color = if (focused) TvDesign.Accent.copy(alpha = .96f) else Color.Transparent,
+                width = if (focused && !catalogOnly) 2.dp else 0.dp,
+                color = if (focused && !catalogOnly) TvDesign.Accent.copy(alpha = .96f) else Color.Transparent,
                 shape = shape,
             )
             .tvPosterActivation(
@@ -1160,7 +1141,7 @@ private fun TvModernHomeCard(
             Text("See All", color = TvDesign.White, fontSize = 17.sp,
                 fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.Center))
         } else when (kind) {
-            TvHomeRowKind.CONTINUE_WATCHING -> ContinueWatchingCardContent(entry, loadImage || focused, focused)
+            TvHomeRowKind.CONTINUE_WATCHING -> ContinueWatchingCardContent(entry, loadImage || focused, focused, portrait = catalogOnly)
             TvHomeRowKind.COLLECTIONS -> {
                 TvNetworkImage(url = entry.media.poster, contentDescription = entry.media.name,
                     modifier = Modifier.fillMaxSize(), loadEnabled = loadImage || focused)
@@ -1211,13 +1192,14 @@ private fun TvHomeCardBadge(text: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun ContinueWatchingCardContent(entry: TvHomeEntry, loadImage: Boolean, focused: Boolean) {
+private fun ContinueWatchingCardContent(entry: TvHomeEntry, loadImage: Boolean, focused: Boolean, portrait: Boolean) {
     val resume = entry as? TvHomeEntry.Resume
     val progress = resume?.playback?.progressFraction ?: 0f
 
     Box(Modifier.fillMaxSize()) {
         TvNetworkImage(
-            url = entry.media.background ?: entry.media.poster,
+            url = if (portrait) entry.media.poster ?: entry.media.background
+            else entry.media.background ?: entry.media.poster,
             contentDescription = entry.media.name,
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.Crop,
