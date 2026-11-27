@@ -91,18 +91,8 @@ internal fun TvHomePresentation(
 
     LaunchedEffect(catalogOnly) { firstLeftPress = 0L }
 
-    LaunchedEffect(firstLeftPress, active, navigationVisible, routeReturnPending) {
-        val pressedAt = firstLeftPress
-        if (pressedAt == 0L) return@LaunchedEffect
-        if (!active || navigationVisible || routeReturnPending) {
-            firstLeftPress = 0L
-            return@LaunchedEffect
-        }
-        delay((280L - (SystemClock.uptimeMillis() - pressedAt)).coerceAtLeast(0L))
-        if (firstLeftPress == pressedAt) {
-            firstLeftPress = 0L
-            onOpenNavigation()
-        }
+    LaunchedEffect(active, navigationVisible, routeReturnPending) {
+        if (!active || navigationVisible || routeReturnPending) firstLeftPress = 0L
     }
 
     LaunchedEffect(catalogOnly, active, focusedEntry?.key, verticalMotionActive, navigationOwnsFocus) {
