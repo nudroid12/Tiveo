@@ -55,6 +55,11 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -135,6 +140,7 @@ internal data class HomeRowsLayout(
     val bottomPadding: Dp,
     val startPadding: Dp,
     val portraitCards: Boolean,
+    val fixedFocus: Boolean,
 )
 
 private data class HomeVerticalFocusTarget(
@@ -983,7 +989,36 @@ private fun TvModernHomeRow(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(start = rowHorizontalPadding - focusPaintInset)
-                    .clipToBounds(),
+                    .clipToBounds()
+                    .drawWithContent {
+                        drawContent()
+                        if (!rowsLayout.fixedFocus || !rowHasFocus) return@drawWithContent
+                        val layout = rowState.layoutInfo
+                        val focusedItem = layout.visibleItemsInfo.firstOrNull { it.key == focusedCardKey }
+                            ?: return@drawWithContent
+                        val anchor = focusPaintInset.toPx()
+                        // At the end of the row, use the focused card's projected
+                        // position after the remaining scroll distance is consumed.
+                        val last = layout.visibleItemsInfo.lastOrNull()
+                        val left = when {
+                            suppressRouteBringIntoView -> focusedItem.offset.toFloat()
+                            last?.index == layout.totalItemsCount - 1 -> {
+                                val remaining = (
+                                    last.offset + last.size - layout.viewportEndOffset + layout.afterContentPadding
+                                ).coerceAtLeast(0)
+                                maxOf(anchor, focusedItem.offset.toFloat() - remaining)
+                            }
+                            else -> anchor
+                        }
+                        val border = 2.dp.toPx()
+                        drawRoundRect(
+                            color = Color.White,
+                            topLeft = Offset(left + border / 2f, anchor + border / 2f),
+                            size = Size(focusedItem.size - border, cardHeight.toPx() - border),
+                            cornerRadius = CornerRadius(11.dp.toPx()),
+                            style = Stroke(border),
+                        )
+                    },
             ) {
                 LazyRow(
                     state = rowState,
@@ -1049,6 +1084,7 @@ private fun TvModernHomeRow(
                             focusScale = focusScale,
                             requester = itemRequester,
                             contentFocusEnabled = contentFocusEnabled,
+                            fixedFocus = rowsLayout.fixedFocus,
                             onLeftAtStart = onLeftAtRowStart.takeIf { index == 0 },
                             onFocusAcquired = { focusedCardKey = entry.key },
                             onFocused = {
@@ -1093,6 +1129,7 @@ private fun TvModernHomeCard(
     focusScale: Float,
     requester: FocusRequester,
     contentFocusEnabled: Boolean,
+    fixedFocus: Boolean,
     onLeftAtStart: (() -> Unit)?,
     onFocusAcquired: () -> Unit,
     onFocused: () -> Unit,
@@ -1101,7 +1138,7 @@ private fun TvModernHomeCard(
 ) {
     var focused by remember(entry.key) { mutableStateOf(false) }
     val isContinueWatching = kind == TvHomeRowKind.CONTINUE_WATCHING
-    val animatedScale = if (isContinueWatching) null else animateFloatAsState(
+    val animatedScale = if (isContinueWatching || fixedFocus) null else animateFloatAsState(
         targetValue = if (focused) focusScale else 1f,
         animationSpec = tvTunedSpec(TvMotionGroup.FOCUS, focused, tween(
             durationMillis = if (focused) TvMotion.FOCUS_IN_MS else TvMotion.FOCUS_OUT_MS,
@@ -1156,7 +1193,7 @@ private fun TvModernHomeCard(
             .clip(shape)
             .background(TvDesign.Surface)
             .border(
-                width = if (focused) 2.dp else 0.dp,
+                width = if (focused && !fixedFocus) 2.dp else 0.dp,
                 color = if (focused) TvDesign.Accent.copy(alpha = .96f) else Color.Transparent,
                 shape = shape,
             )

@@ -60,6 +60,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -103,19 +104,9 @@ internal fun VueoDetailHero(
     val creditLines = remember(item) { DetailPeoplePolicy.creditLines(item) }
     val seriesNeedsEpisode = item.isDetailSeries() && item.episodes.isNotEmpty()
     val canPlay = !seriesNeedsEpisode || state.selectedEpisode != null
-    val primaryMeta = remember(item, state.ratings, state.vueoExtras.fullReleaseDate) {
-        buildList {
-            if (item.genres.isNotEmpty()) add(item.genres.take(4).joinToString(" • "))
-            (state.vueoExtras.fullReleaseDate ?: item.releaseInfo)
-                ?.trim()
-                ?.takeIf(String::isNotBlank)
-                ?.let(::add)
-            if (state.ratings.isEmpty()) {
-                item.imdbRating?.takeIf { it.isFinite() && it > 0.0 }
-                    ?.let { add("IMDb ${String.format("%.1f", it)}") }
-            }
-        }
-    }
+    val releaseDate = (state.vueoExtras.fullReleaseDate ?: item.releaseInfo)
+        ?.trim()
+        ?.takeIf(String::isNotBlank)
     val secondaryMeta = remember(item, state.vueoExtras.country, state.vueoExtras.language) {
         buildList {
             item.runtimeMinutes?.takeIf { it > 0 }?.let { add(vueoDetailRuntime(it)) }
@@ -148,57 +139,23 @@ internal fun VueoDetailHero(
         if (state.ratings.isNotEmpty() || state.dnaMatch != null) {
             VueoRatingsRow(state.ratings, state.dnaMatch)
             Spacer(Modifier.height(12.dp))
-        }
-
-        if (primaryMeta.isNotEmpty()) {
-            VueoMetaTextRow(primaryMeta, fontSize = 13)
-            Spacer(Modifier.height(9.dp))
+        } else {
+            item.imdbRating?.takeIf { it.isFinite() && it > 0.0 }?.let {
+                VueoMetaTextRow(listOf("IMDb ${String.format("%.1f", it)}"), fontSize = 13)
+                Spacer(Modifier.height(10.dp))
+            }
         }
 
         val certification = ContentWarningRepository.tvCertification(item)
-        val status = state.vueoExtras.status?.trim()?.takeIf(String::isNotBlank)
-        if (certification != null || status != null || secondaryMeta.isNotEmpty()) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(11.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                when {
-                    certification != null && status != null -> VueoCombinedMetaBadge(certification, status)
-                    certification != null -> VueoMetaBadge(certification)
-                    status != null -> VueoMetaBadge(status)
-                }
-                if ((certification != null || status != null) && secondaryMeta.isNotEmpty()) {
-                    VueoMetaDot()
-                }
-                secondaryMeta.forEachIndexed { index, value ->
-                    Text(
-                        text = value,
-                        color = TvDesign.White.copy(alpha = .88f),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                    )
-                    if (index < secondaryMeta.lastIndex) VueoMetaDot()
-                }
-            }
-        }
         val imdbId = ContentWarningRepository.titleImdbId(item)
         val contentWarnings by produceState(emptyList<String>(), imdbId) {
             value = imdbId?.let { ContentWarningRepository.getForTvTitle(it) }.orEmpty()
         }
-        if (contentWarnings.isNotEmpty()) {
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = contentWarnings.joinToString(" · "),
-                color = TvDesign.White.copy(alpha = .82f),
-                fontSize = 12.sp,
-                lineHeight = 16.sp,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth(VueoHeroContentWidth),
-            )
+        if (certification != null || contentWarnings.isNotEmpty()) {
+            VueoDetailContentWarning(certification, contentWarnings)
+            Spacer(Modifier.height(10.dp))
         }
-        Spacer(Modifier.height(14.dp))
+
         item.description?.trim()?.takeIf(String::isNotBlank)?.let { synopsis ->
             Text(
                 text = synopsis,
@@ -251,6 +208,35 @@ internal fun VueoDetailHero(
 
         }
 
+        Spacer(Modifier.height(10.dp))
+
+        if (item.genres.isNotEmpty()) {
+            VueoMetaTextRow(item.genres.take(4), fontSize = 13)
+            Spacer(Modifier.height(6.dp))
+        }
+
+        val status = state.vueoExtras.status?.trim()?.takeIf(String::isNotBlank)
+        val releaseMeta = listOfNotNull(releaseDate) + secondaryMeta
+        if (status != null || releaseMeta.isNotEmpty()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(VueoHeroContentWidth),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                status?.let { VueoMetaBadge(it) }
+                if (releaseMeta.isNotEmpty()) {
+                    Text(
+                        text = releaseMeta.joinToString(" · "),
+                        color = TvDesign.White.copy(alpha = .88f),
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+
         if (creditLines.isNotEmpty()) {
             Spacer(Modifier.height(14.dp))
             Column(
@@ -271,7 +257,6 @@ internal fun VueoDetailHero(
             }
             Spacer(Modifier.height(11.dp))
         }
-
     }
 }
 
@@ -337,14 +322,14 @@ private fun VueoPlayButton(
             .clip(shape)
             .background(
                 when {
-                    !enabled -> TvDesign.White.copy(alpha = .22f)
-                    focused -> TvDesign.Accent
-                    else -> TvDesign.Accent.copy(alpha = .88f)
+                    !enabled -> Color.Black.copy(alpha = .28f)
+                    focused -> Color.White
+                    else -> Color.Black.copy(alpha = .68f)
                 }
             )
             .border(
-                width = if (focused) 2.dp else 0.dp,
-                color = if (focused) TvDesign.OnAccent else Color.Transparent,
+                width = 1.dp,
+                color = if (focused) Color.White else Color.White.copy(alpha = .44f),
                 shape = shape,
             )
             .clickable(enabled = enabled, onClick = onClick)
@@ -355,12 +340,12 @@ private fun VueoPlayButton(
         Icon(
             imageVector = Icons.Default.PlayArrow,
             contentDescription = null,
-            tint = if (enabled) TvDesign.OnAccent else TvDesign.White.copy(alpha = .48f),
+            tint = if (!enabled) Color.White.copy(alpha = .48f) else if (focused) Color.Black else Color.White,
             modifier = Modifier.size(23.dp),
         )
         Text(
             text = label,
-            color = if (enabled) TvDesign.OnAccent else TvDesign.White.copy(alpha = .48f),
+            color = if (!enabled) Color.White.copy(alpha = .48f) else if (focused) Color.Black else Color.White,
             fontSize = 16.sp,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
@@ -426,13 +411,13 @@ private fun VueoRatingPill(
         label = "detailRatingFocusAlpha",
     )
     val highlightX = highlightOffset.coerceIn(0.dp, dislikeStart)
-    val highlightOpacity = highlightAlpha.coerceIn(0f, 1f)
+    val highlightOpacity = if (groupFocused) highlightAlpha.coerceIn(0f, 1f) else 0f
 
     fun iconTint(slot: Dp): Color {
         // Match the text/icon contrast to the moving white highlight.
         val distance = abs((highlightX - slot).value)
         val coverage = (1f - distance / 34f).coerceIn(0f, 1f) * highlightOpacity
-        return lerp(TvDesign.White, TvDesign.OnAccent, coverage)
+        return lerp(Color.White, Color.Black, coverage)
     }
 
     fun closeRating() {
@@ -484,7 +469,7 @@ private fun VueoRatingPill(
                 .offset(x = highlightX + 4.dp)
                 .size(VueoHeroActionSize - 8.dp)
                 .alpha(highlightOpacity)
-                .background(TvDesign.Accent, CircleShape),
+                .background(Color.White, CircleShape),
         )
 
         Box(
@@ -589,7 +574,7 @@ private fun VueoCircleAction(
     var focused by remember(requester) { mutableStateOf(false) }
 
     val shape = if (label == null) CircleShape else RoundedCornerShape(6.dp)
-    val color = if (selected || focused) TvDesign.OnAccent else TvDesign.White
+    val color = if (focused) Color.Black else Color.White
 
     Row(
         modifier = Modifier
@@ -605,15 +590,14 @@ private fun VueoCircleAction(
             .clip(shape)
             .background(
                 when {
-                    selected && focused -> TvDesign.Accent
-                    selected -> TvDesign.Accent.copy(alpha = .92f)
-                    focused -> TvDesign.Accent
+                    focused -> Color.White
+                    selected -> TvDesign.SurfaceRaised
                     else -> TvDesign.SurfaceRaised.copy(alpha = .82f)
                 }
             )
             .border(
                 width = if (focused) 2.dp else 1.dp,
-                color = if (focused && selected) TvDesign.OnAccent else if (focused) TvDesign.Accent else TvDesign.White.copy(alpha = .13f),
+                color = if (focused) Color.White else if (selected) TvDesign.Accent else Color.White.copy(alpha = .36f),
                 shape = shape,
             )
             .clickable(onClick = onClick)
@@ -796,25 +780,33 @@ private fun VueoMetaBadge(text: String) {
     }
 }
 
+private val DetailWarningLineBrush = Brush.verticalGradient(
+    colors = listOf(
+        Color(0xFFBD51EB), Color(0xFF9265FF), Color(0xFF5991FE), Color(0xFF2DD6EE),
+        Color(0xFF86E3BC), Color(0xFFFFD070), Color(0xFFFFB84B),
+    ),
+)
+
 @Composable
-private fun VueoCombinedMetaBadge(
-    left: String,
-    right: String,
-) {
+private fun VueoDetailContentWarning(certification: String?, warnings: List<String>) {
     Row(
-        modifier = Modifier
-            .border(
-                width = 1.dp,
-                color = TvDesign.White.copy(alpha = .55f),
-                shape = RoundedCornerShape(5.dp),
-            )
-            .padding(horizontal = 8.dp, vertical = 3.dp),
-        horizontalArrangement = Arrangement.spacedBy(7.dp),
+        modifier = Modifier.fillMaxWidth(VueoHeroContentWidth),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(left, color = TvDesign.White.copy(alpha = .72f), fontSize = 11.sp, fontWeight = FontWeight.Medium)
-        Box(Modifier.width(1.dp).height(13.dp).background(TvDesign.White.copy(alpha = .42f)))
-        Text(right, color = TvDesign.White.copy(alpha = .94f), fontSize = 11.sp, fontWeight = FontWeight.Medium)
+        Box(Modifier.width(3.dp).height(24.dp).background(DetailWarningLineBrush, RoundedCornerShape(2.dp)))
+        certification?.let { VueoMetaBadge(it) }
+        if (warnings.isNotEmpty()) {
+            Text(
+                text = warnings.joinToString(" · "),
+                color = Color.White,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 

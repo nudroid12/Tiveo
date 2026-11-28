@@ -1,5 +1,7 @@
 package com.vueo.tv.settings
 
+import androidx.compose.ui.platform.LocalContext
+import com.vueo.tv.home.TvHomeFocusPreferences
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -228,6 +230,10 @@ internal fun TvAppearanceSettings(
     val theme = TvDesign.Theme
     val accent = TvDesign.AccentChoice
 
+    val context = LocalContext.current
+    val fixedFocus = TvHomeFocusPreferences.isFixed(context)
+    val changeFocusStyle = { TvHomeFocusPreferences.setFixed(context, !fixedFocus) }
+
     val entries = listOf(
         choiceEntry("theme", "Theme", "Choose the dark cinematic base palette.", theme.label, {
             val next = cycle(AppTheme.entries, TvDesign.Theme, -1); store.setAppTheme(next); TvDesign.applyTheme(next)
@@ -239,6 +245,14 @@ internal fun TvAppearanceSettings(
         }, {
             val next = cycle(AppAccent.entries, TvDesign.AccentChoice, 1); store.setAppAccent(next); TvDesign.applyAccent(next)
         }).copy(section = "LOOK & FEEL"),
+        choiceEntry(
+            "home-focus-style",
+            "Row focus style",
+            "Choose how the focus outline moves in Home and Catalog Only.",
+            if (fixedFocus) "Fixed focus" else "Follow card",
+            changeFocusStyle,
+            changeFocusStyle,
+        ).copy(section = "HOME & CATALOG"),
     )
     TvSettingsListScreen("Appearance", "Choose a dark Tiveo palette and tune the interactive accent.", entries, onNavigate, onProfile, onBack)
 }
