@@ -110,7 +110,7 @@ private val TvHomeRowKind.cardHeight: Dp
 
 
 private fun TvHomeRowKind.cardFocusScale(): Float =
-    tvTunedFocusScale(if (this == TvHomeRowKind.CONTINUE_WATCHING) 1.022f else 1.035f)
+    if (this == TvHomeRowKind.CONTINUE_WATCHING) 1f else tvTunedFocusScale(1.035f)
 
 private fun TvHomeRowKind.focusPaintInset(scale: Float = cardFocusScale()): Dp =
     if (scale > 1f) {
@@ -734,13 +734,12 @@ private fun TvModernHomeRow(
     val focusScale = row.kind.cardFocusScale()
     val focusPaintInset = row.kind.focusPaintInset(focusScale)
 
-    // Port of NuvioTV 0.8.3-beta ModernHomeRows focus alignment policy.
-    // Left/Right keeps the focused poster at the row start; Up/Down must
-    // restore the row position before asking Compose to focus that poster.
-    // This row already has external left padding, so the local anchor is 0
-    // (or focusPaintInset when the focused card is scaled).
-    val horizontalBringIntoViewSpec = remember(density, defaultBringIntoViewSpec, focusPaintInset) {
-        val anchorPx = with(density) { focusPaintInset.toPx() }
+    // Continue Watching uses Nuvio's full-width rail: the focus anchor is
+    // the LazyRow's leading content padding, in both Home presentations.
+    val isContinueWatching = row.kind == TvHomeRowKind.CONTINUE_WATCHING
+    val rowContentStart = if (isContinueWatching) rowHorizontalPadding else focusPaintInset
+    val horizontalBringIntoViewSpec = remember(density, defaultBringIntoViewSpec, rowContentStart) {
+        val anchorPx = with(density) { rowContentStart.roundToPx().toFloat() }
         @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
         object : BringIntoViewSpec {
             override val scrollAnimationSpec: AnimationSpec<Float> =
@@ -985,8 +984,11 @@ private fun TvModernHomeRow(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = rowHorizontalPadding - focusPaintInset)
-                    .clipToBounds(),
+                    .then(
+                        if (isContinueWatching) Modifier else Modifier
+                            .padding(start = rowHorizontalPadding - focusPaintInset)
+                            .clipToBounds()
+                    ),
             ) {
                 LazyRow(
                     state = rowState,
@@ -1012,9 +1014,9 @@ private fun TvModernHomeRow(
                         .onFocusChanged { rowHasFocus = it.hasFocus }
                         .focusGroup(),
                     contentPadding = PaddingValues(
-                        start = focusPaintInset,
+                        start = rowContentStart,
                         top = focusPaintInset,
-                        end = 32.dp.coerceAtLeast(focusPaintInset),
+                        end = if (isContinueWatching) rowHorizontalPadding else 32.dp.coerceAtLeast(focusPaintInset),
                         bottom = focusPaintInset,
                     ),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -1053,8 +1055,8 @@ private fun TvModernHomeRow(
                             requester = itemRequester,
                             contentFocusEnabled = contentFocusEnabled,
                             onLeftAtStart = onLeftAtRowStart.takeIf { index == 0 },
+                            onFocusAcquired = { focusedCardKey = entry.key },
                             onFocused = {
-                                focusedCardKey = entry.key
                                 val returningToThisCard = verticalFocusTarget?.let {
                                     it.routeReturn && (if(it.cardKey != null) it.cardKey == entry.key else it.cardIndex == index)
                                 } == true
@@ -1097,12 +1099,14 @@ private fun TvModernHomeCard(
     requester: FocusRequester,
     contentFocusEnabled: Boolean,
     onLeftAtStart: (() -> Unit)?,
+    onFocusAcquired: () -> Unit,
     onFocused: () -> Unit,
     onOpen: () -> Unit,
     onHold: () -> Unit,
 ) {
     var focused by remember(entry.key) { mutableStateOf(false) }
-    val animatedScale by animateFloatAsState(
+    val isContinueWatching = kind == TvHomeRowKind.CONTINUE_WATCHING
+    val animatedScale = if (isContinueWatching) null else animateFloatAsState(
         targetValue = if (focused) focusScale else 1f,
         animationSpec = tvTunedSpec(TvMotionGroup.FOCUS, focused, tween(
             durationMillis = if (focused) TvMotion.FOCUS_IN_MS else TvMotion.FOCUS_OUT_MS,
@@ -1113,15 +1117,26 @@ private fun TvModernHomeCard(
 
     val shape = if (!portraitCards && (kind == TvHomeRowKind.CONTINUE_WATCHING || kind == TvHomeRowKind.COLLECTIONS)) ContinueShape else PosterShape
 
+    // Like Nuvio's Continue Watching item, publish the focus change through
+    // a composition effect once the native focus target has accepted it.
+    val latestOnFocused by rememberUpdatedState(onFocused)
+    if (isContinueWatching) {
+        LaunchedEffect(focused) {
+            if (focused) latestOnFocused()
+        }
+    }
+
     Box(
         modifier = Modifier
             .width(width)
             .height(height)
             .zIndex(if (focused) 1f else 0f)
-            .graphicsLayer {
-                scaleX = animatedScale
-                scaleY = animatedScale
-            }
+            .then(
+                if (animatedScale == null) Modifier else Modifier.graphicsLayer {
+                    scaleX = animatedScale.value
+                    scaleY = animatedScale.value
+                }
+            )
             .focusRequester(requester)
             .focusProperties { canFocus = contentFocusEnabled }
             .onPreviewKeyEvent { event ->
@@ -1137,7 +1152,10 @@ private fun TvModernHomeCard(
             }
             .onFocusChanged { state ->
                 val becameFocused = state.isFocused
-                if (becameFocused && !focused) onFocused()
+                if (becameFocused && !focused) {
+                    onFocusAcquired()
+                    if (!isContinueWatching) onFocused()
+                }
                 focused = becameFocused
             }
             .clip(shape)
