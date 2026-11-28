@@ -7,6 +7,7 @@ import com.vueo.tv.ui.tvPrefetchImage
 import androidx.compose.ui.unit.Density
 import com.vueo.tv.ui.motion.*
 import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -93,6 +94,9 @@ private inline fun traceHome(build: () -> String) {
         PerformanceDiagnostics.captureRuntimeEvent(build())
     }
 }
+
+// Nuvio Smooth Focus Scroll uses 180 as spring stiffness, not duration.
+private val HomeHorizontalFocusSpring = spring<Float>(dampingRatio = 0.95f, stiffness = 180f)
 
 private val ContinueWatchingWidth = 210.dp
 private val ContinueWatchingHeight = 119.dp
@@ -607,7 +611,6 @@ internal fun TvModernHomeRows(
                 }
                 TvModernHomeRow(
                     rowVisible = rowVisible,
-                    defaultBringIntoViewSpec = defaultBringIntoViewSpec,
                     rowsLayout = rowsLayout,
                     row = row,
                     rowState = rowState,
@@ -683,7 +686,6 @@ internal fun TvModernHomeRows(
 private fun TvModernHomeRow(
     row: TvHomeRow,
     rowVisible: Boolean,
-    defaultBringIntoViewSpec: BringIntoViewSpec,
     rowsLayout: HomeRowsLayout,
     rowState: LazyListState,
     rowFocusRequester: FocusRequester,
@@ -734,16 +736,12 @@ private fun TvModernHomeRow(
     val focusScale = row.kind.cardFocusScale()
     val focusPaintInset = row.kind.focusPaintInset(focusScale)
 
-    // Continue Watching uses Nuvio's full-width rail: the focus anchor is
-    // the LazyRow's leading content padding, in both Home presentations.
     val isContinueWatching = row.kind == TvHomeRowKind.CONTINUE_WATCHING
-    val rowContentStart = if (isContinueWatching) rowHorizontalPadding else focusPaintInset
-    val horizontalBringIntoViewSpec = remember(density, defaultBringIntoViewSpec, rowContentStart) {
-        val anchorPx = with(density) { rowContentStart.roundToPx().toFloat() }
+    val horizontalBringIntoViewSpec = remember(density, focusPaintInset) {
+        val anchorPx = with(density) { focusPaintInset.roundToPx().toFloat() }
         @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
         object : BringIntoViewSpec {
-            override val scrollAnimationSpec: AnimationSpec<Float> =
-                defaultBringIntoViewSpec.scrollAnimationSpec
+            override val scrollAnimationSpec: AnimationSpec<Float> = HomeHorizontalFocusSpring
 
             override fun calculateScrollDistance(
                 offset: Float,
@@ -984,11 +982,8 @@ private fun TvModernHomeRow(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .then(
-                        if (isContinueWatching) Modifier else Modifier
-                            .padding(start = rowHorizontalPadding - focusPaintInset)
-                            .clipToBounds()
-                    ),
+                    .padding(start = rowHorizontalPadding - focusPaintInset)
+                    .clipToBounds(),
             ) {
                 LazyRow(
                     state = rowState,
@@ -1014,7 +1009,7 @@ private fun TvModernHomeRow(
                         .onFocusChanged { rowHasFocus = it.hasFocus }
                         .focusGroup(),
                     contentPadding = PaddingValues(
-                        start = rowContentStart,
+                        start = focusPaintInset,
                         top = focusPaintInset,
                         end = if (isContinueWatching) rowHorizontalPadding else 32.dp.coerceAtLeast(focusPaintInset),
                         bottom = focusPaintInset,
