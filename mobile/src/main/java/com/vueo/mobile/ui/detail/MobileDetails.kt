@@ -2093,10 +2093,6 @@ internal fun MediaDetailsScreen(
                 ?.let(
                     ::formatDetailsRuntime
                 ),
-            item.certification
-                ?.takeIf {
-                    it.isNotBlank()
-                },
         )
 
     // Snapshot the delegated Compose state into a stable local before checking it.
@@ -2591,10 +2587,12 @@ internal fun MediaDetailsScreen(
             }
 
         val detailCast = DetailPeoplePolicy.cast(item)
-        if (detailCast.isNotEmpty()) {
+        val credits = mobileCrewCredits(item)
+        if (detailCast.isNotEmpty() || credits.isNotEmpty()) {
             item {
                 MediaCastSection(
                     cast = detailCast,
+                    credits = credits,
                     onPersonClick = { person ->
                         onEntityClick(
                             MediaEntityTarget(
